@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: kafka-streams-example
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    streams:
+      application-id: kafka-streams-example-app
+      properties:
+        # Default SerDes for keys and values
+        default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+        default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+        # Ensure data is consumed from the beginning of the topic if no offset is present
+        auto.offset.reset: earliest
+
+app:
+  kafka:
+    topic:
+      input: "upstream-topic"
+      output: "private-topic"
