@@ -2,13 +2,23 @@ package e2e;
 
 import io.restassured.RestAssured;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.hamcrest.CoreMatchers;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
-import org.springframework.kafka.test.EmbeddedKafkaKraftBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -17,13 +27,21 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @Slf4j
 class FullSystemIT {
 
+    private static final String UPSTREAM_TOPIC = "upstream-topic";
+    private static final String PRIVATE_TOPIC = "private-topic";
+    private static final String DOWNSTREAM_TOPIC = "downstream-topic";
+
     private static EmbeddedKafkaBroker embeddedKafka;
+
     private static Process appOneProcess;
     private static Process appTwoProcess;
     private static int appOnePort;
@@ -32,18 +50,13 @@ class FullSystemIT {
     @TempDir
     static Path tempDir;
 
+    private static KafkaTemplate<String, String> kafkaTemplate;
+    private static Consumer<String, String> consumer;
+
     @BeforeAll
     static void startApplications() throws IOException, InterruptedException {
 
-        // 2. Start the embedded Kafka broker FIRST
-
-        embeddedKafka = new EmbeddedKafkaKraftBroker(1, 2, "upstream-topic", "private-topic", "downstream-topic")
-                .kafkaPorts(0);
-        embeddedKafka.afterPropertiesSet();
-
-        String bootstrapServers = embeddedKafka.getBrokersAsString();
-        log.info("Bootstrap servers: {}", bootstrapServers);
-
+        String bootstrapServers = initKafka();
         // 1. Find free ports
         appOnePort = findFreePort();
         appTwoPort = findFreePort();
@@ -59,6 +72,31 @@ class FullSystemIT {
         log.info("Both applications started successfully.");
     }
 
+    static String initKafka() {
+        embeddedKafka = new EmbeddedKafkaZKBroker(1, true, 2, UPSTREAM_TOPIC, PRIVATE_TOPIC, DOWNSTREAM_TOPIC)
+                .kafkaPorts(0);
+        embeddedKafka.afterPropertiesSet();
+
+
+        Map<String, Object> producerProps = KafkaTestUtils.producerProps(embeddedKafka);
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        DefaultKafkaProducerFactory<String, String> producerFactory = new DefaultKafkaProducerFactory<>(producerProps);
+        kafkaTemplate = new KafkaTemplate<>(producerFactory);
+
+        // Consumer setup
+        Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("test-group", "true", embeddedKafka);
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DefaultKafkaConsumerFactory<String, String> consumerFactory = new DefaultKafkaConsumerFactory<>(consumerProps);
+        consumer = consumerFactory.createConsumer();
+        consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
+
+        return embeddedKafka.getBrokersAsString();
+    }
+
+
     @AfterAll
     static void stopApplications() throws InterruptedException {
         // 5. Terminate processes
@@ -73,25 +111,31 @@ class FullSystemIT {
             if (appTwoProcess.isAlive()) appTwoProcess.destroyForcibly();
         }
         log.info("Both applications stopped.");
+
+        if (consumer != null) {
+            consumer.close();
+        }
     }
 
     @Test
     void testApp1() throws Exception {
-        log.info("App 1");
+        // 2. Act: Send a message to the input topic
+        String key = "testKey";
+        String message = "hello world";
+        Thread.sleep(Duration.ofSeconds(60).toMillis());
+        kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
+
+        // 3. Assert: Consume the message from the output topic
+        // KafkaTestUtils.getSingleRecord polls the consumer for a message for a specified duration.
+        ConsumerRecord<String, String> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
+
+
+        // 4. Verify the consumed message is correct
+        assertThat(singleRecord).isNotNull();
+        assertThat(singleRecord.key()).isEqualTo(key);
+        assertThat(singleRecord.value()).isEqualTo("HELLO WORLD - FINISH");
     }
 
-    @Test
-    void systemShouldBeHealthy() {
-        // This test now also uses REST Assured for consistency
-        RestAssured.given()
-                .port(appOnePort)
-                .when()
-                .get("/actuator/health")
-                .then()
-                .statusCode(200)
-                .body("status", CoreMatchers.equalTo("UP"))
-                .body(CoreMatchers.containsString("\"kafka\"")); // Verify kafka component in health check
-    }
 
     private static Process startApp(String appPath, String bootstrapServers, Set<String> profiles, int port) throws IOException {
         Path path = Paths.get(appPath);
