@@ -2,14 +2,21 @@ package e2e;
 
 import io.restassured.RestAssured;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.RecordsToDelete;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.awaitility.Awaitility;
 import org.hamcrest.CoreMatchers;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,8 +35,10 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,10 +62,18 @@ class FullSystemIT {
     private static KafkaTemplate<String, String> kafkaTemplate;
     private static Consumer<String, String> consumer;
 
+    private static AdminClient adminClient;
+
     @BeforeAll
     static void startApplications() throws IOException, InterruptedException {
 
         String bootstrapServers = initKafka();
+
+        // 2. Initialize the AdminClient after the broker starts
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        adminClient = AdminClient.create(props);
+
         // 1. Find free ports
         appOnePort = findFreePort();
         appTwoPort = findFreePort();
@@ -77,7 +94,6 @@ class FullSystemIT {
                 .kafkaPorts(0);
         embeddedKafka.afterPropertiesSet();
 
-
         Map<String, Object> producerProps = KafkaTestUtils.producerProps(embeddedKafka);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -94,6 +110,37 @@ class FullSystemIT {
         consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
 
         return embeddedKafka.getBrokersAsString();
+    }
+
+    @AfterEach
+    void clearKafkaTopics() throws Exception {
+        // Get all topics
+        Set<String> topics = adminClient.listTopics().names().get();
+
+        // Filter out internal Kafka topics (e.g., __consumer_offsets, __transaction_state)
+        Set<String> topicsToClear = topics.stream()
+                .filter(topicName -> !topicName.startsWith("__"))
+                .collect(Collectors.toSet());
+
+        if (topicsToClear.isEmpty()) {
+            return; // Nothing to do
+        }
+
+        log.info("Clearing Kafka topics after test: {}", topicsToClear);
+
+        // Describe topics to get their partitions
+        Map<String, TopicDescription> topicDescriptions = adminClient.describeTopics(topicsToClear).allTopicNames().get();
+
+        // Create a map of TopicPartition to RecordsToDelete.
+        // RecordsToDelete.beforeOffset(-1) signifies deleting all records.
+        Map<TopicPartition, RecordsToDelete> recordsToDelete = topicDescriptions.values().stream()
+                .flatMap(desc -> desc.partitions().stream()
+                        .map(p -> new TopicPartition(desc.name(), p.partition())))
+                .collect(Collectors.toMap(tp -> tp, tp -> RecordsToDelete.beforeOffset(-1L)));
+
+        // Execute the deletion
+        adminClient.deleteRecords(recordsToDelete).all().get();
+        log.info("Topics cleared successfully.");
     }
 
 
@@ -122,7 +169,6 @@ class FullSystemIT {
         // 2. Act: Send a message to the input topic
         String key = "testKey";
         String message = "hello world";
-        Thread.sleep(Duration.ofSeconds(60).toMillis());
         kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
 
         // 3. Assert: Consume the message from the output topic
@@ -134,6 +180,24 @@ class FullSystemIT {
         assertThat(singleRecord).isNotNull();
         assertThat(singleRecord.key()).isEqualTo(key);
         assertThat(singleRecord.value()).isEqualTo("HELLO WORLD - FINISH");
+    }
+
+    @Test
+    void testApp2() throws Exception {
+        // 2. Act: Send a message to the input topic
+        String key = "testKey";
+        String message = "ala ma kota";
+        kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
+
+        // 3. Assert: Consume the message from the output topic
+        // KafkaTestUtils.getSingleRecord polls the consumer for a message for a specified duration.
+        ConsumerRecord<String, String> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
+
+
+        // 4. Verify the consumed message is correct
+        assertThat(singleRecord).isNotNull();
+        assertThat(singleRecord.key()).isEqualTo(key);
+        assertThat(singleRecord.value()).isEqualTo("ALA MA KOTA - FINISH");
     }
 
 
@@ -197,28 +261,21 @@ class FullSystemIT {
         }
     }
 
-    private static void waitForApp(String appName, int port) throws InterruptedException {
-        long timeout = System.currentTimeMillis() + Duration.ofSeconds(90).toMillis();
+    private static void waitForApp(String appName, int port) {
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(90))
+                .pollInterval(Duration.ofSeconds(2))
+                .ignoreExceptions()
+                .untilAsserted(() -> {
+                    RestAssured.given()
+                            .port(port)
+                            .when()
+                            .get("/actuator/health")
+                            .then()
+                            .statusCode(200)
+                            .body("status", CoreMatchers.equalTo("UP"));
+                });
 
-        while (System.currentTimeMillis() < timeout) {
-            try {
-                // Use REST Assured to check the health endpoint
-                RestAssured.given()
-                        .port(port)
-                        .when()
-                        .get("/actuator/health")
-                        .then()
-                        .statusCode(200)
-                        .body("status", CoreMatchers.equalTo("UP")); // More robust: check status is UP
-
-                log.info("{} on port {} is up!", appName, port);
-                return; // Success, exit the loop
-            } catch (Exception e) {
-                // Catches ConnectionRefusedException and other initial connection errors from REST Assured
-                // App not ready yet, wait and retry
-                Thread.sleep(2500);
-            }
-        }
-        throw new RuntimeException(appName + " did not start in time or did not report a healthy status.");
+        log.info("{} on port {} is up!", appName, port);
     }
 }
