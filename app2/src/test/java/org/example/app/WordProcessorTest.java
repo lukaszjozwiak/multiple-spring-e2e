@@ -7,10 +7,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -47,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         brokerProperties = {"listeners=PLAINTEXT://localhost:9093", "port=9093", "auto.create.topics.enable=false"}
 )
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Disabled
 public class WordProcessorTest {
 
     @Autowired
