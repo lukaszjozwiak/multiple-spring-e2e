@@ -16,8 +16,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -28,6 +26,10 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -157,17 +159,24 @@ public abstract class KafkaIntegrationTestBase {
 
     private static void waitForApp(int port, String appName) {
         log.info("Waiting for {} on port {} to be healthy...", appName, port);
-        String healthCheckUrl = String.format("http://localhost:%d/actuator/health", port);
+
+        HttpRequest healthCheckRequest = HttpRequest.newBuilder()
+                .uri(URI.create(String.format("http://localhost:%d/actuator/health", port)))
+                .timeout(Duration.ofSeconds(1))
+                .GET()
+                .build();
 
         await()
                 .atMost(Duration.ofSeconds(90))
                 .pollInterval(Duration.ofSeconds(2))
                 .ignoreExceptions()
                 .untilAsserted(() -> {
-                    ResponseEntity<String> response = testRestTemplate.getForEntity(healthCheckUrl, String.class);
-                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-                    assertThat(response.getBody()).isNotNull();
-                    assertThat(response.getBody()).contains("\"status\":\"UP\"");
+                    try (HttpClient httpClient = HttpClient.newHttpClient()) {
+                        HttpResponse<String> response = httpClient.send(healthCheckRequest, HttpResponse.BodyHandlers.ofString());
+                        assertThat(response.statusCode()).isEqualTo(200);
+                        assertThat(response.body()).isNotNull();
+                        assertThat(response.body()).contains("\"status\":\"UP\"");
+                    }
                 });
 
         log.info("{} on port {} is up!", appName, port);
