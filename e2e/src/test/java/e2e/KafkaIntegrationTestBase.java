@@ -1,6 +1,5 @@
 package e2e;
 
-import io.restassured.RestAssured;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -12,11 +11,13 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.hamcrest.CoreMatchers;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -38,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 @Slf4j
@@ -62,6 +64,8 @@ public abstract class KafkaIntegrationTestBase {
 
     @TempDir
     static Path tempDirApp2;
+
+    private static final TestRestTemplate testRestTemplate = new TestRestTemplate();
 
     @BeforeAll
     static void beforeAll() throws Exception {
@@ -153,17 +157,19 @@ public abstract class KafkaIntegrationTestBase {
 
     private static void waitForApp(int port, String appName) {
         log.info("Waiting for {} on port {} to be healthy...", appName, port);
+        String healthCheckUrl = String.format("http://localhost:%d/actuator/health", port);
+
         await()
                 .atMost(Duration.ofSeconds(90))
                 .pollInterval(Duration.ofSeconds(2))
                 .ignoreExceptions()
-                .untilAsserted(() -> RestAssured.given()
-                        .port(port)
-                        .when()
-                        .get("/actuator/health")
-                        .then()
-                        .statusCode(200)
-                        .body("status", CoreMatchers.equalTo("UP")));
+                .untilAsserted(() -> {
+                    ResponseEntity<String> response = testRestTemplate.getForEntity(healthCheckUrl, String.class);
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                    assertThat(response.getBody()).isNotNull();
+                    assertThat(response.getBody()).contains("\"status\":\"UP\"");
+                });
+
         log.info("{} on port {} is up!", appName, port);
     }
 
