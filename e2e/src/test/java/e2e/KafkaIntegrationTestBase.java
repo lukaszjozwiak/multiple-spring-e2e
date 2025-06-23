@@ -12,7 +12,6 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.awaitility.Awaitility;
 import org.hamcrest.CoreMatchers;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -38,6 +37,8 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
+
+import static org.awaitility.Awaitility.await;
 
 @Slf4j
 public abstract class KafkaIntegrationTestBase {
@@ -68,20 +69,24 @@ public abstract class KafkaIntegrationTestBase {
         initConsumer("test-consumer");
         initProducer();
         initAdminClient();
-        initApplications();
+        initAndStartApplications(); // Renamed for clarity
     }
 
-    @BeforeAll
-    static void initApplications() throws Exception {
+    private static void initAndStartApplications() throws Exception {
+        log.info("Starting application 1...");
         startApp("../app1/target/app1-1.0-SNAPSHOT.jar", tempDirApp1, ((process, port) -> {
             appOneProcess = process;
             appOnePort = port;
         }));
 
+        log.info("Starting application 2...");
         startApp("../app2/target/app2-1.0-SNAPSHOT.jar", tempDirApp2, ((process, port) -> {
             appTwoProcess = process;
             appTwoPort = port;
         }));
+
+        waitForApp(appOnePort, "App1"); // Wait for App1 to be healthy
+        waitForApp(appTwoPort, "App2"); // Wait for App2 to be healthy
     }
 
     private static void initKafkaBroker(String... topics) {
@@ -93,7 +98,6 @@ public abstract class KafkaIntegrationTestBase {
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
         adminClient = AdminClient.create(props);
-
     }
 
     private static void initProducer() {
@@ -106,6 +110,7 @@ public abstract class KafkaIntegrationTestBase {
 
     protected static void initConsumer(String consumerGroup) {
         Map<String, Object> consumerProps = KafkaTestUtils.consumerProps(consumerGroup, "false", kafkaBroker);
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         DefaultKafkaConsumerFactory<String, String> consumerFactory = new DefaultKafkaConsumerFactory<>(consumerProps);
@@ -131,16 +136,12 @@ public abstract class KafkaIntegrationTestBase {
         );
 
         log.info("Starting app {} with commands: {}", appPath, String.join(" ", processCommands));
-
         ProcessBuilder builder = new ProcessBuilder(processCommands);
-
         builder.redirectError(new File(tempDir.toFile(), jarName + "-error.log"));
         builder.redirectOutput(new File(tempDir.toFile(), jarName + "-output.log"));
 
         Process process = builder.start();
         initializer.accept(process, port);
-
-        log.info("{} on port {} is up!", jarName, port);
     }
 
     private static int findFreePort() throws IOException {
@@ -150,28 +151,31 @@ public abstract class KafkaIntegrationTestBase {
         }
     }
 
-    private static void waitForApp(int port) {
-        Awaitility.await()
+    private static void waitForApp(int port, String appName) {
+        log.info("Waiting for {} on port {} to be healthy...", appName, port);
+        await()
                 .atMost(Duration.ofSeconds(90))
                 .pollInterval(Duration.ofSeconds(2))
                 .ignoreExceptions()
-                .untilAsserted(() -> {
-                    RestAssured.given()
-                            .port(port)
-                            .when()
-                            .get("/actuator/health")
-                            .then()
-                            .statusCode(200)
-                            .body("status", CoreMatchers.equalTo("UP"));
-                });
+                .untilAsserted(() -> RestAssured.given()
+                        .port(port)
+                        .when()
+                        .get("/actuator/health")
+                        .then()
+                        .statusCode(200)
+                        .body("status", CoreMatchers.equalTo("UP")));
+        log.info("{} on port {} is up!", appName, port);
     }
 
     @AfterAll
-    static void stopApplications() throws Exception {
+    static void stopAll() {
+        log.info("Stopping all integration test components...");
         stopConsumer();
-        stopProcess(appOneProcess);
-        stopProcess(appTwoProcess);
+        stopProcess(appOneProcess, "App1");
+        stopProcess(appTwoProcess, "App2");
+        stopAdminClient();
         stopKafkaBroker();
+        log.info("All components stopped.");
     }
 
     private static void stopConsumer() {
@@ -188,42 +192,54 @@ public abstract class KafkaIntegrationTestBase {
         }
     }
 
-    private static void stopProcess(Process process) throws InterruptedException {
+    private static void stopAdminClient() {
+        if (adminClient != null) {
+            adminClient.close(Duration.ofSeconds(5));
+        }
+    }
+
+    private static void stopProcess(Process process, String appName) {
         if (process != null) {
+            log.info("Stopping process for {}...", appName);
             process.destroy();
-            process.waitFor(5, TimeUnit.SECONDS);
-            if (process.isAlive()) process.destroyForcibly();
+            try {
+                if (process.waitFor(10, TimeUnit.SECONDS)) {
+                    log.info("Process for {} stopped gracefully.", appName);
+                } else {
+                    log.warn("Process for {} did not stop gracefully after 10 seconds. Forcing shutdown.", appName);
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException e) {
+                log.error("Interrupted while waiting for process {} to stop. Forcing shutdown.", appName, e);
+                process.destroyForcibly();
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
     @AfterEach
     void clearKafkaTopics() throws Exception {
-        // Get all topics
         Set<String> topics = adminClient.listTopics().names().get();
-
-        // Filter out internal Kafka topics (e.g., __consumer_offsets, __transaction_state)
         Set<String> topicsToClear = topics.stream()
                 .filter(topicName -> !topicName.startsWith("__"))
                 .collect(Collectors.toSet());
 
         if (topicsToClear.isEmpty()) {
-            return; // Nothing to do
+            return;
         }
 
         log.info("Clearing Kafka topics after test: {}", topicsToClear);
 
-        // Describe topics to get their partitions
         Map<String, TopicDescription> topicDescriptions = adminClient.describeTopics(topicsToClear).allTopicNames().get();
 
-        // Create a map of TopicPartition to RecordsToDelete.
-        // RecordsToDelete.beforeOffset(-1) signifies deleting all records.
         Map<TopicPartition, RecordsToDelete> recordsToDelete = topicDescriptions.values().stream()
                 .flatMap(desc -> desc.partitions().stream()
                         .map(p -> new TopicPartition(desc.name(), p.partition())))
                 .collect(Collectors.toMap(tp -> tp, tp -> RecordsToDelete.beforeOffset(-1L)));
 
-        // Execute the deletion
-        adminClient.deleteRecords(recordsToDelete).all().get();
-        log.info("Topics cleared successfully.");
+        if (!recordsToDelete.isEmpty()) {
+            adminClient.deleteRecords(recordsToDelete).all().get();
+            log.info("Topics cleared successfully.");
+        }
     }
 }
