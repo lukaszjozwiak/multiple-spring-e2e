@@ -12,6 +12,7 @@
         <module>app1</module>
         <module>app2</module>
         <module>e2e</module>
+        <module>common</module>
     </modules>
 
     <dependencyManagement>

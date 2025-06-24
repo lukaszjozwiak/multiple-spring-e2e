@@ -1,5 +1,6 @@
 package e2e;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -7,6 +8,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
@@ -18,11 +20,16 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import java.util.Map;
 import java.util.Properties;
 
+@Slf4j
 @Configuration
 class ItConfig {
 
+    @Value("${app.kafka.topic.upstream}")
+    private String upstream;
+
     @Bean
     AdminClient adminClient(EmbeddedKafkaBroker kafkaBroker) {
+        log.info("Creating admin client with {}", upstream);
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
         return AdminClient.create(props);

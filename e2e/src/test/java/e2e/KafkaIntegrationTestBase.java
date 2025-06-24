@@ -13,12 +13,14 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 
 import java.io.File;
 import java.io.IOException;
@@ -44,7 +46,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 @SpringBootTest(classes = ItConfig.class)
-@EmbeddedKafka(topics = {KafkaIntegrationTestBase.UPSTREAM_TOPIC, KafkaIntegrationTestBase.PRIVATE_TOPIC, KafkaIntegrationTestBase.DOWNSTREAM_TOPIC})
+//@EmbeddedKafka(topics = {KafkaIntegrationTestBase.UPSTREAM_TOPIC, KafkaIntegrationTestBase.PRIVATE_TOPIC, KafkaIntegrationTestBase.DOWNSTREAM_TOPIC})
+@TestPropertySource(locations = "classpath:common.properties")
+@EmbeddedKafka(topics = {"${app.kafka.topic.upstream}", "${app.kafka.topic.private}", "${app.kafka.topic.downstream}"})
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Slf4j

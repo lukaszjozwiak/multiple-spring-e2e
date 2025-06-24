@@ -12,8 +12,3 @@ spring:
         # Ensure data is consumed from the beginning of the topic if no offset is present
         auto.offset.reset: earliest
 
-app:
-  kafka:
-    topic:
-      input: "upstream-topic"
-      output: "private-topic"

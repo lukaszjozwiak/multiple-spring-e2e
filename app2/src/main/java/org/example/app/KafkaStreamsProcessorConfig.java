@@ -9,6 +9,7 @@ import org.apache.kafka.streams.kstream.Produced;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
 
 /**
@@ -22,13 +23,14 @@ import org.springframework.kafka.annotation.EnableKafkaStreams;
  */
 @Configuration
 @EnableKafkaStreams
+@PropertySource("classpath:common.properties")
 @Slf4j
 public class KafkaStreamsProcessorConfig {
 
-    @Value("${app.kafka.topic.input}")
+    @Value("${app.kafka.topic.private}")
     private String inputTopic;
 
-    @Value("${app.kafka.topic.output}")
+    @Value("${app.kafka.topic.downstream}")
     private String outputTopic;
 
     @Bean
