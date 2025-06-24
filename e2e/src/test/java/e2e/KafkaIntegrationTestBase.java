@@ -1,5 +1,6 @@
 package e2e;
 
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.RecordsToDelete;
@@ -32,6 +33,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
@@ -81,23 +85,44 @@ public abstract class KafkaIntegrationTestBase {
     }
 
     private void initAndStartApplications() throws Exception {
-        log.info("Starting application 1...");
-        startApp("../app1/target/app1-1.0-SNAPSHOT.jar", tempDirApp1, ((process, port) -> {
-            appOneProcess = process;
-            appOnePort = port;
-        }));
+        CountDownLatch readyLatch = new CountDownLatch(2);
 
-        log.info("Starting application 2...");
-        startApp("../app2/target/app2-1.0-SNAPSHOT.jar", tempDirApp2, ((process, port) -> {
-            appTwoProcess = process;
-            appTwoPort = port;
-        }));
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            executor.submit(() -> {
+                try {
+                    log.info("Starting application 1...");
+                    startApp("../app1/target/app1-1.0-SNAPSHOT.jar", tempDirApp1, ((process, port) -> {
+                        appOneProcess = process;
+                        appOnePort = port;
+                    }));
+                } finally {
+                    readyLatch.countDown();
+                }
+            });
+            executor.submit(() -> {
+                try {
+                    log.info("Starting application 2...");
+                    startApp("../app2/target/app2-1.0-SNAPSHOT.jar", tempDirApp2, ((process, port) -> {
+                        appTwoProcess = process;
+                        appTwoPort = port;
+                    }));
+                } finally {
+                    readyLatch.countDown();
+                }
+            });
+        }
 
-        waitForApp(appOnePort, "App1"); // Wait for App1 to be healthy
-        waitForApp(appTwoPort, "App2"); // Wait for App2 to be healthy
+        boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
+
+        if (!appsAreReady) {
+            throw new IllegalStateException("Timeout exceeded while waiting for applications to start.");
+        }
+
+        log.info("Both applications are healthy. Proceeding with tests.");
     }
 
-    private void startApp(String appPath, Path tempDir, BiConsumer<Process, Integer> initializer) throws Exception {
+    @SneakyThrows
+    private void startApp(String appPath, Path tempDir, BiConsumer<Process, Integer> initializer) {
         Integer port = findFreePort();
         Path path = Paths.get(appPath);
         String jarName = path.getFileName().toString();
@@ -122,6 +147,7 @@ public abstract class KafkaIntegrationTestBase {
 
         Process process = builder.start();
         initializer.accept(process, port);
+        waitForApp(appOnePort, jarName);
     }
 
     private static int findFreePort() throws IOException {
@@ -157,11 +183,37 @@ public abstract class KafkaIntegrationTestBase {
     }
 
     @AfterAll
+    @SneakyThrows
     void stopAll() {
         log.info("Stopping all integration test components...");
         stopConsumer();
-        stopProcess(appOneProcess, "App1");
-        stopProcess(appTwoProcess, "App2");
+        CountDownLatch readyLatch = new CountDownLatch(2);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            executor.submit(() -> {
+                try {
+                    stopProcess(appOneProcess, "App1");
+                } finally {
+                    readyLatch.countDown();
+                }
+            });
+            executor.submit(() -> {
+                try {
+                    stopProcess(appTwoProcess, "App2");
+                } finally {
+                    readyLatch.countDown();
+                }
+            });
+        }
+
+        boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
+
+        if (!appsAreReady) {
+            throw new IllegalStateException("Timeout exceeded while waiting for applications to stop.");
+        }
+
+        log.info("Both applications stopped");
+
         stopAdminClient();
         stopKafkaBroker();
         log.info("All components stopped.");
