@@ -14,14 +14,19 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
-import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
+import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 import java.io.File;
 import java.io.IOException;
@@ -44,6 +49,10 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+@ExtendWith({SpringExtension.class})
+@EmbeddedKafka(topics = {KafkaIntegrationTestBase.UPSTREAM_TOPIC, KafkaIntegrationTestBase.PRIVATE_TOPIC, KafkaIntegrationTestBase.DOWNSTREAM_TOPIC})
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Slf4j
 public abstract class KafkaIntegrationTestBase {
 
@@ -51,15 +60,17 @@ public abstract class KafkaIntegrationTestBase {
     protected static final String PRIVATE_TOPIC = "private-topic";
     protected static final String DOWNSTREAM_TOPIC = "downstream-topic";
 
-    private static EmbeddedKafkaBroker kafkaBroker;
-    protected static KafkaTemplate<String, String> kafkaTemplate;
-    protected static Consumer<String, String> consumer;
-    private static AdminClient adminClient;
+    @Autowired
+    private EmbeddedKafkaBroker kafkaBroker;
 
-    private static Process appOneProcess;
-    private static Process appTwoProcess;
-    private static int appOnePort;
-    private static int appTwoPort;
+    protected KafkaTemplate<String, String> kafkaTemplate;
+    protected Consumer<String, String> consumer;
+    private AdminClient adminClient;
+
+    private Process appOneProcess;
+    private Process appTwoProcess;
+    private int appOnePort;
+    private int appTwoPort;
 
     @TempDir
     static Path tempDirApp1;
@@ -70,15 +81,14 @@ public abstract class KafkaIntegrationTestBase {
     private static final TestRestTemplate testRestTemplate = new TestRestTemplate();
 
     @BeforeAll
-    static void beforeAll() throws Exception {
-        initKafkaBroker(UPSTREAM_TOPIC, PRIVATE_TOPIC, DOWNSTREAM_TOPIC);
+    void beforeAll() throws Exception {
         initConsumer("test-consumer");
         initProducer();
         initAdminClient();
         initAndStartApplications(); // Renamed for clarity
     }
 
-    private static void initAndStartApplications() throws Exception {
+    private void initAndStartApplications() throws Exception {
         log.info("Starting application 1...");
         startApp("../app1/target/app1-1.0-SNAPSHOT.jar", tempDirApp1, ((process, port) -> {
             appOneProcess = process;
@@ -95,18 +105,13 @@ public abstract class KafkaIntegrationTestBase {
         waitForApp(appTwoPort, "App2"); // Wait for App2 to be healthy
     }
 
-    private static void initKafkaBroker(String... topics) {
-        kafkaBroker = new EmbeddedKafkaZKBroker(1, true, 2, topics).kafkaPorts(0);
-        kafkaBroker.afterPropertiesSet();
-    }
-
-    private static void initAdminClient() {
+    private void initAdminClient() {
         Properties props = new Properties();
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
-        adminClient = AdminClient.create(props);
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, this.kafkaBroker.getBrokersAsString());
+        this.adminClient = AdminClient.create(props);
     }
 
-    private static void initProducer() {
+    private void initProducer() {
         Map<String, Object> producerProps = KafkaTestUtils.producerProps(kafkaBroker);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -114,7 +119,7 @@ public abstract class KafkaIntegrationTestBase {
         kafkaTemplate = new KafkaTemplate<>(producerFactory);
     }
 
-    protected static void initConsumer(String consumerGroup) {
+    protected void initConsumer(String consumerGroup) {
         Map<String, Object> consumerProps = KafkaTestUtils.consumerProps(consumerGroup, "false", kafkaBroker);
         consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
@@ -123,7 +128,7 @@ public abstract class KafkaIntegrationTestBase {
         consumer = consumerFactory.createConsumer();
     }
 
-    private static void startApp(String appPath, Path tempDir, BiConsumer<Process, Integer> initializer) throws Exception {
+    private void startApp(String appPath, Path tempDir, BiConsumer<Process, Integer> initializer) throws Exception {
         Integer port = findFreePort();
         Path path = Paths.get(appPath);
         String jarName = path.getFileName().toString();
@@ -183,7 +188,7 @@ public abstract class KafkaIntegrationTestBase {
     }
 
     @AfterAll
-    static void stopAll() {
+    void stopAll() {
         log.info("Stopping all integration test components...");
         stopConsumer();
         stopProcess(appOneProcess, "App1");
@@ -193,21 +198,21 @@ public abstract class KafkaIntegrationTestBase {
         log.info("All components stopped.");
     }
 
-    private static void stopConsumer() {
+    private void stopConsumer() {
         if (consumer != null) {
             consumer.close();
             log.info("Kafka Consumer stopped.");
         }
     }
 
-    private static void stopKafkaBroker() {
+    private void stopKafkaBroker() {
         if (kafkaBroker != null) {
             kafkaBroker.destroy();
             log.info("Embedded Kafka stopped.");
         }
     }
 
-    private static void stopAdminClient() {
+    private void stopAdminClient() {
         if (adminClient != null) {
             adminClient.close(Duration.ofSeconds(5));
         }
