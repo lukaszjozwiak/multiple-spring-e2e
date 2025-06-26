@@ -1,15 +1,14 @@
 package e2e;
 
-import io.confluent.kafka.schemaregistry.rest.SchemaRegistryConfig;
-import io.confluent.kafka.schemaregistry.rest.SchemaRegistryRestApplication;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.RecordsToDelete;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.common.TopicPartition;
-import org.eclipse.jetty.server.Server;
+import org.apache.kafka.common.config.ConfigResource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -36,7 +34,6 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -73,8 +70,8 @@ public abstract class KafkaIntegrationTestBase {
     @Autowired
     private AdminClient adminClient;
 
-    private Server schemaRegistryServer;
-    private String schemaRegistryUrl;
+    @Autowired
+    private SchemaRegistryServer schemaRegistryServer;
 
     private Process appOneProcess;
     private Process appTwoProcess;
@@ -82,32 +79,11 @@ public abstract class KafkaIntegrationTestBase {
     private int appTwoPort;
 
     @TempDir
-    static Path tempDirApp1;
-
-    @TempDir
-    static Path tempDirApp2;
-
+    static Path tempDirApp;
 
     @BeforeAll
     void beforeAll() throws Exception {
-        this.schemaRegistryUrl = startSchemaRegistry();
-        System.setProperty("schema.registry.url", this.schemaRegistryUrl);
-        initAndStartApplications(); // Renamed for clarity
-    }
-
-    private String startSchemaRegistry() throws Exception {
-        int port = findFreePort();
-        Properties properties = new Properties();
-        properties.put(SchemaRegistryConfig.LISTENERS_CONFIG, "http://0.0.0.0:" + port);
-        // Point the schema registry to our embedded Kafka broker for its storage
-        properties.put(SchemaRegistryConfig.KAFKASTORE_BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
-        properties.put(SchemaRegistryConfig.KAFKASTORE_TOPIC_CONFIG, "_schemas");
-
-        SchemaRegistryRestApplication app = new SchemaRegistryRestApplication(new SchemaRegistryConfig(properties));
-        this.schemaRegistryServer = app.createServer();
-        this.schemaRegistryServer.start();
-        log.info("Embedded Schema Registry started at: {}", schemaRegistryServer.getURI());
-        return schemaRegistryServer.getURI().toString();
+        initAndStartApplications();
     }
 
     private void initAndStartApplications() throws Exception {
@@ -117,7 +93,7 @@ public abstract class KafkaIntegrationTestBase {
             executor.submit(() -> {
                 try {
                     log.info("Starting application 1...");
-                    startApp("../app1/target/app1-1.0-SNAPSHOT.jar", tempDirApp1, ((process, port) -> {
+                    startApp("../app1/target/app1-1.0-SNAPSHOT.jar", ((process, port) -> {
                         appOneProcess = process;
                         appOnePort = port;
                     }));
@@ -128,7 +104,7 @@ public abstract class KafkaIntegrationTestBase {
             executor.submit(() -> {
                 try {
                     log.info("Starting application 2...");
-                    startApp("../app2/target/app2-1.0-SNAPSHOT.jar", tempDirApp2, ((process, port) -> {
+                    startApp("../app2/target/app2-1.0-SNAPSHOT.jar", ((process, port) -> {
                         appTwoProcess = process;
                         appTwoPort = port;
                     }));
@@ -148,7 +124,7 @@ public abstract class KafkaIntegrationTestBase {
     }
 
     @SneakyThrows
-    private void startApp(String appPath, Path tempDir, BiConsumer<Process, Integer> initializer) {
+    private void startApp(String appPath, BiConsumer<Process, Integer> initializer) {
         Integer port = findFreePort();
         Path path = Paths.get(appPath);
         String jarName = path.getFileName().toString();
@@ -164,13 +140,13 @@ public abstract class KafkaIntegrationTestBase {
                 path.toAbsolutePath().toString(),
                 "--server.port=" + port,
                 "--spring.kafka.bootstrap-servers=" + kafkaBroker.getBrokersAsString(),
-                "--spring.kafka.properties.schema.registry.url=" + this.schemaRegistryUrl
+                "--spring.kafka.properties.schema.registry.url=" + schemaRegistryServer.getSchemaRegistryUrl()
         );
 
         log.info("Starting app {} with commands: {}", appPath, String.join(" ", processCommands));
         ProcessBuilder builder = new ProcessBuilder(processCommands);
-        builder.redirectError(new File(tempDir.toFile(), jarName + "-error.log"));
-        builder.redirectOutput(new File(tempDir.toFile(), jarName + "-output.log"));
+        builder.redirectError(new File(tempDirApp.toFile(), jarName + "-error.log"));
+        builder.redirectOutput(new File(tempDirApp.toFile(), jarName + "-output.log"));
 
         Process process = builder.start();
         initializer.accept(process, port);
@@ -241,18 +217,9 @@ public abstract class KafkaIntegrationTestBase {
 
         log.info("Both applications stopped");
 
-        stopSchemaRegistryServer();
         stopAdminClient();
         stopKafkaBroker();
         log.info("All components stopped.");
-    }
-
-    @SneakyThrows
-    private void stopSchemaRegistryServer() {
-        if (this.schemaRegistryServer != null) {
-            this.schemaRegistryServer.stop();
-            log.info("Embedded Schema Registry stopped.");
-        }
     }
 
     private void stopConsumer() {
@@ -296,27 +263,45 @@ public abstract class KafkaIntegrationTestBase {
 
     @AfterEach
     void clearKafkaTopics() throws Exception {
-        Set<String> topics = adminClient.listTopics().names().get();
-        Set<String> topicsToClear = topics.stream()
-                .filter(topicName -> !topicName.startsWith("__"))
+
+        // 1. all user-visible topics (skip internal "__")
+        Set<String> topics = adminClient.listTopics().names().get().stream()
+                .filter(t -> !t.startsWith("__"))
+                .collect(Collectors.toSet());
+        if (topics.isEmpty()) return;
+
+        // 2. fetch metadata + config for every topic
+        Map<String, TopicDescription> desc =
+                adminClient.describeTopics(topics).allTopicNames().get();
+
+        Set<ConfigResource> resources = desc.keySet().stream()
+                .map(n -> new ConfigResource(ConfigResource.Type.TOPIC, n))
+                .collect(Collectors.toSet());
+        Map<ConfigResource, Config> cfg =
+                adminClient.describeConfigs(resources).all().get();
+
+        // 3. only topics whose cleanup.policy == delete  (policy allows truncate)
+        Set<String> deletableTopics = cfg.entrySet().stream()
+                .filter(e -> {
+                    String v = e.getValue()
+                            .get("cleanup.policy")
+                            .value();            // null → defaults to delete
+                    return v == null || "delete".equals(v);
+                })
+                .map(e -> e.getKey().name())
                 .collect(Collectors.toSet());
 
-        if (topicsToClear.isEmpty()) {
-            return;
-        }
+        if (deletableTopics.isEmpty()) return;
 
-        log.info("Clearing Kafka topics after test: {}", topicsToClear);
+        // 4. build RecordsToDelete request
+        Map<TopicPartition, RecordsToDelete> recordsToDelete = desc.values().stream()
+                .filter(d -> deletableTopics.contains(d.name()))
+                .flatMap(d -> d.partitions().stream()
+                        .map(p -> new TopicPartition(d.name(), p.partition())))
+                .collect(Collectors.toMap(tp -> tp,
+                        tp -> RecordsToDelete.beforeOffset(-1L)));
 
-        Map<String, TopicDescription> topicDescriptions = adminClient.describeTopics(topicsToClear).allTopicNames().get();
-
-        Map<TopicPartition, RecordsToDelete> recordsToDelete = topicDescriptions.values().stream()
-                .flatMap(desc -> desc.partitions().stream()
-                        .map(p -> new TopicPartition(desc.name(), p.partition())))
-                .collect(Collectors.toMap(tp -> tp, tp -> RecordsToDelete.beforeOffset(-1L)));
-
-        if (!recordsToDelete.isEmpty()) {
-            adminClient.deleteRecords(recordsToDelete).all().get();
-            log.info("Topics cleared successfully.");
-        }
+        adminClient.deleteRecords(recordsToDelete).all().get();
+        log.info("Cleared Kafka topics: {}", deletableTopics);
     }
 }
