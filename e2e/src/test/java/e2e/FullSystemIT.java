@@ -19,7 +19,7 @@ class FullSystemIT extends KafkaIntegrationTestBase {
         kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
 
         consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
-        ConsumerRecord<String, String> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
+        ConsumerRecord<String, Object> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
 
         assertThat(singleRecord).isNotNull();
         assertThat(singleRecord.key()).isEqualTo(key);
@@ -33,7 +33,7 @@ class FullSystemIT extends KafkaIntegrationTestBase {
         kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
 
         consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
-        ConsumerRecord<String, String> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
+        ConsumerRecord<String, Object> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
 
         assertThat(singleRecord).isNotNull();
         assertThat(singleRecord.key()).isEqualTo(key);

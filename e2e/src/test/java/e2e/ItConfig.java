@@ -1,5 +1,8 @@
 package e2e;
 
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -36,21 +39,25 @@ class ItConfig {
     }
 
     @Bean
-    Consumer<String, String> consumer(EmbeddedKafkaBroker kafkaBroker) {
+    Consumer<String, Object> consumer(@Value("${schema.registry.url}") String schemaRegistryUrl, EmbeddedKafkaBroker kafkaBroker) {
         Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("test-group", "false", kafkaBroker);
         consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        DefaultKafkaConsumerFactory<String, String> consumerFactory = new DefaultKafkaConsumerFactory<>(consumerProps);
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
+        consumerProps.put("schema.registry.url", schemaRegistryUrl);
+        // Allows deserializing to specific Avro record types
+        consumerProps.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, "true");
+        DefaultKafkaConsumerFactory<String, Object> consumerFactory = new DefaultKafkaConsumerFactory<>(consumerProps);
         return consumerFactory.createConsumer();
     }
 
     @Bean
-    KafkaTemplate<String, String> kafkaTemplate(EmbeddedKafkaBroker kafkaBroker) {
+    KafkaTemplate<String, Object> kafkaTemplate(@Value("${schema.registry.url}") String schemaRegistryUrl, EmbeddedKafkaBroker kafkaBroker) {
         Map<String, Object> producerProps = KafkaTestUtils.producerProps(kafkaBroker);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        DefaultKafkaProducerFactory<String, String> producerFactory = new DefaultKafkaProducerFactory<>(producerProps);
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
+        producerProps.put("schema.registry.url", schemaRegistryUrl);
+        DefaultKafkaProducerFactory<String, Object> producerFactory = new DefaultKafkaProducerFactory<>(producerProps);
         return new KafkaTemplate<>(producerFactory);
     }
 }

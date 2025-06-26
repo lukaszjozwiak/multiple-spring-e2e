@@ -1,5 +1,7 @@
 package e2e;
 
+import io.confluent.kafka.schemaregistry.rest.SchemaRegistryConfig;
+import io.confluent.kafka.schemaregistry.rest.SchemaRegistryRestApplication;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
@@ -7,13 +9,13 @@ import org.apache.kafka.clients.admin.RecordsToDelete;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.common.TopicPartition;
+import org.eclipse.jetty.server.Server;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -34,6 +36,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -62,13 +65,16 @@ public abstract class KafkaIntegrationTestBase {
     private EmbeddedKafkaBroker kafkaBroker;
 
     @Autowired
-    protected KafkaTemplate<String, String> kafkaTemplate;
+    protected KafkaTemplate<String, Object> kafkaTemplate;
 
     @Autowired
-    protected Consumer<String, String> consumer;
+    protected Consumer<String, Object> consumer;
 
     @Autowired
     private AdminClient adminClient;
+
+    private Server schemaRegistryServer;
+    private String schemaRegistryUrl;
 
     private Process appOneProcess;
     private Process appTwoProcess;
@@ -81,11 +87,27 @@ public abstract class KafkaIntegrationTestBase {
     @TempDir
     static Path tempDirApp2;
 
-    private static final TestRestTemplate testRestTemplate = new TestRestTemplate();
 
     @BeforeAll
     void beforeAll() throws Exception {
+        this.schemaRegistryUrl = startSchemaRegistry();
+        System.setProperty("schema.registry.url", this.schemaRegistryUrl);
         initAndStartApplications(); // Renamed for clarity
+    }
+
+    private String startSchemaRegistry() throws Exception {
+        int port = findFreePort();
+        Properties properties = new Properties();
+        properties.put(SchemaRegistryConfig.LISTENERS_CONFIG, "http://0.0.0.0:" + port);
+        // Point the schema registry to our embedded Kafka broker for its storage
+        properties.put(SchemaRegistryConfig.KAFKASTORE_BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
+        properties.put(SchemaRegistryConfig.KAFKASTORE_TOPIC_CONFIG, "_schemas");
+
+        SchemaRegistryRestApplication app = new SchemaRegistryRestApplication(new SchemaRegistryConfig(properties));
+        this.schemaRegistryServer = app.createServer();
+        this.schemaRegistryServer.start();
+        log.info("Embedded Schema Registry started at: {}", schemaRegistryServer.getURI());
+        return schemaRegistryServer.getURI().toString();
     }
 
     private void initAndStartApplications() throws Exception {
@@ -141,7 +163,8 @@ public abstract class KafkaIntegrationTestBase {
                 "-jar",
                 path.toAbsolutePath().toString(),
                 "--server.port=" + port,
-                "--spring.kafka.bootstrap-servers=" + kafkaBroker.getBrokersAsString()
+                "--spring.kafka.bootstrap-servers=" + kafkaBroker.getBrokersAsString(),
+                "--spring.kafka.properties.schema.registry.url=" + this.schemaRegistryUrl
         );
 
         log.info("Starting app {} with commands: {}", appPath, String.join(" ", processCommands));
@@ -218,9 +241,18 @@ public abstract class KafkaIntegrationTestBase {
 
         log.info("Both applications stopped");
 
+        stopSchemaRegistryServer();
         stopAdminClient();
         stopKafkaBroker();
         log.info("All components stopped.");
+    }
+
+    @SneakyThrows
+    private void stopSchemaRegistryServer() {
+        if (this.schemaRegistryServer != null) {
+            this.schemaRegistryServer.stop();
+            log.info("Embedded Schema Registry stopped.");
+        }
     }
 
     private void stopConsumer() {
