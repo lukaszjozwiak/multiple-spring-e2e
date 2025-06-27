@@ -1,6 +1,11 @@
 package org.example.app;
 
+import com.example.avro.SampleRecord;
+import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.avro.specific.SpecificRecord;
+import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.Consumed;
@@ -11,6 +16,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
+
+import java.util.Map;
 
 /**
  * This class defines the Kafka Streams topology using a Spring @Configuration.
@@ -34,21 +41,26 @@ public class KafkaStreamsProcessorConfig {
     private String outputTopic;
 
     @Bean
-    public KStream<String, String> kStream(StreamsBuilder streamsBuilder) {
-        // Define the input stream from the specified topic.
-        KStream<String, String> stream = streamsBuilder.stream(
+    public KStream<String, SampleRecord> kStream(StreamsBuilder streamsBuilder, Serde<SampleRecord> avroSerde) {
+
+        KStream<String, SampleRecord> stream = streamsBuilder.stream(
                 inputTopic,
-                Consumed.with(Serdes.String(), Serdes.String())
+                Consumed.with(Serdes.String(), avroSerde)
         );
 
-        // Process the stream: for each message, convert its value to uppercase.
-        stream.mapValues(value -> value + " - FINISH")
-                // Optional: Log the transformed value to the console for debugging.
+        stream.mapValues(value ->
+                        new SampleRecord(value.getNumber() * -1, value.getText() + " - FINISH"))
                 .peek((key, value) -> log.info("Transformed value: {}", value))
-                // Write the transformed stream to the output topic.
-                .to(outputTopic, Produced.with(Serdes.String(), Serdes.String()));
+                .to(outputTopic, Produced.with(Serdes.String(), avroSerde));
 
-        // The KStream is returned, but the primary purpose of this bean is to build the topology.
         return stream;
+    }
+
+    @Bean
+    static <T extends SpecificRecord> Serde<T> avroSerde(@Value("${spring.kafka.properties.schema.registry.url}") String schemaRegistryUrl) {
+        Serde<T> serde = new SpecificAvroSerde<>();
+        Map<String, Object> props = Map.of(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        serde.configure(props, false);
+        return serde;
     }
 }

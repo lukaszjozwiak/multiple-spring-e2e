@@ -1,0 +1,16 @@
+/**
+ * A trivial Avro IDL demonstrating nullable fields.
+ */
+@namespace("com.example.avro")
+protocol ExampleProtocol {
+
+	/**
+	 * A single record we care about.
+	 */
+	record SampleRecord {
+		/** Nullable integer (maps to java.lang.Integer). */
+		union{null, int} number;
+		/** Nullable string (maps to java.lang.CharSequence/String). */
+		union{null, string} text;
+	}
+}

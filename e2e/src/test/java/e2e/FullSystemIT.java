@@ -1,5 +1,6 @@
 package e2e;
 
+import com.example.avro.SampleRecord;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
@@ -13,30 +14,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FullSystemIT extends KafkaIntegrationTestBase {
 
     @Test
-    void testApp1() throws Exception {
+    void testFullFlowWithAvroSchema() {
         String key = "testKey";
-        String message = "hello world";
+        SampleRecord message = new SampleRecord(10, "hello world");
         kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
 
         consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
-        ConsumerRecord<String, Object> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
+        ConsumerRecord<String, SampleRecord> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
 
         assertThat(singleRecord).isNotNull();
         assertThat(singleRecord.key()).isEqualTo(key);
-        assertThat(singleRecord.value()).isEqualTo("HELLO WORLD - FINISH");
-    }
-
-    @Test
-    void testApp2() throws Exception {
-        String key = "testKey";
-        String message = "ala ma kota";
-        kafkaTemplate.send(UPSTREAM_TOPIC, key, message);
-
-        consumer.subscribe(java.util.Collections.singletonList(DOWNSTREAM_TOPIC));
-        ConsumerRecord<String, Object> singleRecord = KafkaTestUtils.getSingleRecord(consumer, DOWNSTREAM_TOPIC, Duration.ofSeconds(10000L));
-
-        assertThat(singleRecord).isNotNull();
-        assertThat(singleRecord.key()).isEqualTo(key);
-        assertThat(singleRecord.value()).isEqualTo("ALA MA KOTA - FINISH");
+        assertThat(singleRecord.value().getNumber()).isEqualTo(-20);
+        assertThat(singleRecord.value().getText()).isEqualTo("HELLO WORLD - FINISH");
     }
 }

@@ -8,7 +8,10 @@ spring:
       properties:
         # Default SerDes for keys and values
         default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
-        default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+        default.value.serde: io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde
         # Ensure data is consumed from the beginning of the topic if no offset is present
         auto.offset.reset: earliest
-
+    properties:
+      schema:
+        registry:
+          url': mock://schema-registry

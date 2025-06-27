@@ -1,5 +1,6 @@
 package e2e;
 
+import com.example.avro.SampleRecord;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.AdminClient;
@@ -55,17 +56,16 @@ import static org.awaitility.Awaitility.await;
 public abstract class KafkaIntegrationTestBase {
 
     protected static final String UPSTREAM_TOPIC = "upstream-topic";
-    protected static final String PRIVATE_TOPIC = "private-topic";
     protected static final String DOWNSTREAM_TOPIC = "downstream-topic";
 
     @Autowired
     private EmbeddedKafkaBroker kafkaBroker;
 
     @Autowired
-    protected KafkaTemplate<String, Object> kafkaTemplate;
+    protected KafkaTemplate<String, SampleRecord> kafkaTemplate;
 
     @Autowired
-    protected Consumer<String, Object> consumer;
+    protected Consumer<String, SampleRecord> consumer;
 
     @Autowired
     private AdminClient adminClient;
