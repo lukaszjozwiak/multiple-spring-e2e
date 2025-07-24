@@ -33,34 +33,33 @@ import org.springframework.kafka.annotation.EnableKafkaStreams;
 @Slf4j
 public class KafkaStreamsProcessorConfig {
 
-  @Value("${app.kafka.topic.upstream}")
-  private String inputTopic;
+    @Value("${app.kafka.topic.upstream}")
+    private String inputTopic;
 
-  @Value("${app.kafka.topic.private}")
-  private String outputTopic;
+    @Value("${app.kafka.topic.private}")
+    private String outputTopic;
 
-  @Bean
-  public KStream<String, SampleRecord> kStream(
-      StreamsBuilder streamsBuilder, Serde<SampleRecord> avroSerde) {
+    @Bean
+    public KStream<String, SampleRecord> kStream(StreamsBuilder streamsBuilder, Serde<SampleRecord> avroSerde) {
 
-    KStream<String, SampleRecord> stream =
-        streamsBuilder.stream(inputTopic, Consumed.with(Serdes.String(), avroSerde));
+        KStream<String, SampleRecord> stream =
+                streamsBuilder.stream(inputTopic, Consumed.with(Serdes.String(), avroSerde));
 
-    stream
-        .mapValues(value -> new SampleRecord(value.getNumber() * 2, value.getText().toUpperCase()))
-        .peek((key, value) -> log.info("Transformed value: {}", value))
-        .to(outputTopic, Produced.with(Serdes.String(), avroSerde));
+        stream.mapValues(value ->
+                        new SampleRecord(value.getNumber() * 2, value.getText().toUpperCase()))
+                .peek((key, value) -> log.info("Transformed value: {}", value))
+                .to(outputTopic, Produced.with(Serdes.String(), avroSerde));
 
-    return stream;
-  }
+        return stream;
+    }
 
-  @Bean
-  static <T extends SpecificRecord> Serde<T> avroSerde(
-      @Value("${spring.kafka.properties.schema.registry.url}") String schemaRegistryUrl) {
-    Serde<T> serde = new SpecificAvroSerde<>();
-    Map<String, Object> props =
-        Map.of(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
-    serde.configure(props, false);
-    return serde;
-  }
+    @Bean
+    static <T extends SpecificRecord> Serde<T> avroSerde(
+            @Value("${spring.kafka.properties.schema.registry.url}") String schemaRegistryUrl) {
+        Serde<T> serde = new SpecificAvroSerde<>();
+        Map<String, Object> props =
+                Map.of(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        serde.configure(props, false);
+        return serde;
+    }
 }

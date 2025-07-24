@@ -31,44 +31,43 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 @EnableAutoConfiguration
 class ItConfig {
 
-  @Bean
-  public MockSchemaRegistryClient mockSchemaRegistryClient() {
-    return new MockSchemaRegistryClient();
-  }
+    @Bean
+    public MockSchemaRegistryClient mockSchemaRegistryClient() {
+        return new MockSchemaRegistryClient();
+    }
 
-  @Bean
-  AdminClient adminClient(EmbeddedKafkaBroker kafkaBroker) {
-    Properties props = new Properties();
-    props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
-    return AdminClient.create(props);
-  }
+    @Bean
+    AdminClient adminClient(EmbeddedKafkaBroker kafkaBroker) {
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBroker.getBrokersAsString());
+        return AdminClient.create(props);
+    }
 
-  @Bean
-  @Lazy
-  Consumer<String, SampleRecord> consumer(
-      @Value("${local.server.port}") int localServerPort, EmbeddedKafkaBroker kafkaBroker) {
-    Map<String, Object> consumerProps =
-        KafkaTestUtils.consumerProps("test-group", "false", kafkaBroker);
-    consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-    consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-    consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
-    consumerProps.put("schema.registry.url", "http://localhost:" + localServerPort);
-    consumerProps.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, "true");
-    DefaultKafkaConsumerFactory<String, SampleRecord> consumerFactory =
-        new DefaultKafkaConsumerFactory<>(consumerProps);
-    return consumerFactory.createConsumer();
-  }
+    @Bean
+    @Lazy
+    Consumer<String, SampleRecord> consumer(
+            @Value("${local.server.port}") int localServerPort, EmbeddedKafkaBroker kafkaBroker) {
+        Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("test-group", "false", kafkaBroker);
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
+        consumerProps.put("schema.registry.url", "http://localhost:" + localServerPort);
+        consumerProps.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, "true");
+        DefaultKafkaConsumerFactory<String, SampleRecord> consumerFactory =
+                new DefaultKafkaConsumerFactory<>(consumerProps);
+        return consumerFactory.createConsumer();
+    }
 
-  @Bean
-  @Lazy
-  KafkaTemplate<String, SampleRecord> kafkaTemplate(
-      @Value("${local.server.port}") int localServerPort, EmbeddedKafkaBroker kafkaBroker) {
-    Map<String, Object> producerProps = KafkaTestUtils.producerProps(kafkaBroker);
-    producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-    producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
-    producerProps.put("schema.registry.url", "http://localhost:" + localServerPort);
-    DefaultKafkaProducerFactory<String, SampleRecord> producerFactory =
-        new DefaultKafkaProducerFactory<>(producerProps);
-    return new KafkaTemplate<>(producerFactory);
-  }
+    @Bean
+    @Lazy
+    KafkaTemplate<String, SampleRecord> kafkaTemplate(
+            @Value("${local.server.port}") int localServerPort, EmbeddedKafkaBroker kafkaBroker) {
+        Map<String, Object> producerProps = KafkaTestUtils.producerProps(kafkaBroker);
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
+        producerProps.put("schema.registry.url", "http://localhost:" + localServerPort);
+        DefaultKafkaProducerFactory<String, SampleRecord> producerFactory =
+                new DefaultKafkaProducerFactory<>(producerProps);
+        return new KafkaTemplate<>(producerFactory);
+    }
 }
