@@ -51,261 +51,271 @@ import org.springframework.test.context.TestPropertySource;
 @SpringBootTest(classes = ItConfig.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ContextConfiguration(classes = MockSchemaRegistryController.class)
 @TestPropertySource(locations = "classpath:common.properties")
-@EmbeddedKafka(topics = {"${app.kafka.topic.upstream}", "${app.kafka.topic.private}", "${app.kafka.topic.downstream}"})
+@EmbeddedKafka(
+		topics = { "${app.kafka.topic.upstream}", "${app.kafka.topic.private}", "${app.kafka.topic.downstream}" })
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Slf4j
 public abstract class KafkaIntegrationTestBase {
 
-    protected static final String UPSTREAM_TOPIC = "upstream-topic";
-    protected static final String DOWNSTREAM_TOPIC = "downstream-topic";
+	protected static final String UPSTREAM_TOPIC = "upstream-topic";
 
-    @LocalServerPort
-    private int localServerPort;
+	protected static final String DOWNSTREAM_TOPIC = "downstream-topic";
 
-    @Value("${project.version}")
-    private String projectVersion;
+	@LocalServerPort
+	private int localServerPort;
 
-    @Autowired
-    private EmbeddedKafkaBroker kafkaBroker;
+	@Value("${project.version}")
+	private String projectVersion;
 
-    @Autowired
-    protected KafkaTemplate<String, SampleRecord> kafkaTemplate;
+	@Autowired
+	private EmbeddedKafkaBroker kafkaBroker;
 
-    @Autowired
-    protected Consumer<String, SampleRecord> consumer;
+	@Autowired
+	protected KafkaTemplate<String, SampleRecord> kafkaTemplate;
 
-    @Autowired
-    private AdminClient adminClient;
+	@Autowired
+	protected Consumer<String, SampleRecord> consumer;
 
-    private Process appOneProcess;
+	@Autowired
+	private AdminClient adminClient;
 
-    private Process appTwoProcess;
-    private int appOnePort;
-    private int appTwoPort;
+	private Process appOneProcess;
 
-    @TempDir
-    static Path tempDirApp;
+	private Process appTwoProcess;
 
-    @BeforeAll
-    void beforeAll() throws Exception {
-        initAndStartApplications();
-    }
+	private int appOnePort;
 
-    private void initAndStartApplications() throws Exception {
-        CountDownLatch readyLatch = new CountDownLatch(2);
+	private int appTwoPort;
 
-        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            executor.submit(() -> {
-                try {
-                    log.info("Starting application 1...");
-                    startApp("../app1/target/app1-%s.jar".formatted(projectVersion), ((process, port) -> {
-                        appOneProcess = process;
-                        appOnePort = port;
-                    }));
-                } finally {
-                    readyLatch.countDown();
-                }
-            });
+	@TempDir
+	static Path tempDirApp;
 
-            executor.submit(() -> {
-                try {
-                    log.info("Starting application 2...");
-                    startApp("../app2/target/app2-%s.jar".formatted(projectVersion), ((process, port) -> {
-                        appTwoProcess = process;
-                        appTwoPort = port;
-                    }));
-                } finally {
-                    readyLatch.countDown();
-                }
-            });
-        }
+	@BeforeAll
+	void beforeAll() throws Exception {
+		initAndStartApplications();
+	}
 
-        boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
+	private void initAndStartApplications() throws Exception {
+		CountDownLatch readyLatch = new CountDownLatch(2);
 
-        if (!appsAreReady) {
-            throw new IllegalStateException("Timeout exceeded while waiting for applications to start.");
-        }
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			executor.submit(() -> {
+				try {
+					log.info("Starting application 1...");
+					startApp("../app1/target/app1-%s.jar".formatted(projectVersion), ((process, port) -> {
+						appOneProcess = process;
+						appOnePort = port;
+					}));
+				}
+				finally {
+					readyLatch.countDown();
+				}
+			});
 
-        log.info("Both applications are healthy. Proceeding with tests.");
-    }
+			executor.submit(() -> {
+				try {
+					log.info("Starting application 2...");
+					startApp("../app2/target/app2-%s.jar".formatted(projectVersion), ((process, port) -> {
+						appTwoProcess = process;
+						appTwoPort = port;
+					}));
+				}
+				finally {
+					readyLatch.countDown();
+				}
+			});
+		}
 
-    @SneakyThrows
-    private void startApp(String appPath, BiConsumer<Process, Integer> initializer) {
+		boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
 
-        Integer port = findFreePort();
-        Path path = Paths.get(appPath);
+		if (!appsAreReady) {
+			throw new IllegalStateException("Timeout exceeded while waiting for applications to start.");
+		}
 
-        String jarName = path.getFileName().toString();
-        File jarPath = new File(appPath);
+		log.info("Both applications are healthy. Proceeding with tests.");
+	}
 
-        if (!jarPath.exists()) {
-            throw new IllegalStateException("JAR file not found for " + appPath + " at " + jarPath.getAbsolutePath());
-        }
+	@SneakyThrows
+	private void startApp(String appPath, BiConsumer<Process, Integer> initializer) {
 
-        List<String> processCommands = List.of(
-                "java",
-                "-jar",
-                path.toAbsolutePath().toString(),
-                "--server.port=" + port,
-                "--spring.kafka.bootstrap-servers=" + kafkaBroker.getBrokersAsString(),
-                "--spring.kafka.properties.schema.registry.url=" + "http://localhost:" + localServerPort);
+		Integer port = findFreePort();
+		Path path = Paths.get(appPath);
 
-        log.info("Starting app {} with commands: {}", appPath, String.join(" ", processCommands));
-        ProcessBuilder builder = new ProcessBuilder(processCommands);
-        builder.redirectError(new File(tempDirApp.toFile(), jarName + "-error.log"));
-        builder.redirectOutput(new File(tempDirApp.toFile(), jarName + "-output.log"));
+		String jarName = path.getFileName().toString();
+		File jarPath = new File(appPath);
 
-        Process process = builder.start();
-        initializer.accept(process, port);
-        waitForApp(appOnePort, jarName);
-    }
+		if (!jarPath.exists()) {
+			throw new IllegalStateException("JAR file not found for " + appPath + " at " + jarPath.getAbsolutePath());
+		}
 
-    private static int findFreePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            return socket.getLocalPort();
-        }
-    }
+		List<String> processCommands = List.of("java", "-jar", path.toAbsolutePath().toString(),
+				"--server.port=" + port, "--spring.kafka.bootstrap-servers=" + kafkaBroker.getBrokersAsString(),
+				"--spring.kafka.properties.schema.registry.url=" + "http://localhost:" + localServerPort);
 
-    private static void waitForApp(int port, String appName) {
-        log.info("Waiting for {} on port {} to be healthy...", appName, port);
+		log.info("Starting app {} with commands: {}", appPath, String.join(" ", processCommands));
+		ProcessBuilder builder = new ProcessBuilder(processCommands);
+		builder.redirectError(new File(tempDirApp.toFile(), jarName + "-error.log"));
+		builder.redirectOutput(new File(tempDirApp.toFile(), jarName + "-output.log"));
 
-        HttpRequest healthCheckRequest = HttpRequest.newBuilder()
-                .uri(URI.create(String.format("http://localhost:%d/actuator/health", port)))
-                .timeout(Duration.ofSeconds(1))
-                .GET()
-                .build();
+		Process process = builder.start();
+		initializer.accept(process, port);
+		waitForApp(appOnePort, jarName);
+	}
 
-        await().atMost(Duration.ofSeconds(90))
-                .pollInterval(Duration.ofSeconds(2))
-                .ignoreExceptions()
-                .untilAsserted(() -> {
-                    try (HttpClient httpClient = HttpClient.newHttpClient()) {
-                        HttpResponse<String> response =
-                                httpClient.send(healthCheckRequest, HttpResponse.BodyHandlers.ofString());
-                        assertThat(response.statusCode()).isEqualTo(200);
-                        assertThat(response.body()).isNotNull();
-                        assertThat(response.body()).contains("\"status\":\"UP\"");
-                    }
-                });
+	private static int findFreePort() throws IOException {
+		try (ServerSocket socket = new ServerSocket(0)) {
+			socket.setReuseAddress(true);
+			return socket.getLocalPort();
+		}
+	}
 
-        log.info("{} on port {} is up!", appName, port);
-    }
+	private static void waitForApp(int port, String appName) {
+		log.info("Waiting for {} on port {} to be healthy...", appName, port);
 
-    @AfterAll
-    @SneakyThrows
-    void stopAll() {
-        log.info("Stopping all integration test components...");
-        stopConsumer();
-        CountDownLatch readyLatch = new CountDownLatch(2);
+		HttpRequest healthCheckRequest = HttpRequest.newBuilder()
+			.uri(URI.create(String.format("http://localhost:%d/actuator/health", port)))
+			.timeout(Duration.ofSeconds(1))
+			.GET()
+			.build();
 
-        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            executor.submit(() -> {
-                try {
-                    stopProcess(appOneProcess, "App1");
-                } finally {
-                    readyLatch.countDown();
-                }
-            });
-            executor.submit(() -> {
-                try {
-                    stopProcess(appTwoProcess, "App2");
-                } finally {
-                    readyLatch.countDown();
-                }
-            });
-        }
+		await().atMost(Duration.ofSeconds(90))
+			.pollInterval(Duration.ofSeconds(2))
+			.ignoreExceptions()
+			.untilAsserted(() -> {
+				try (HttpClient httpClient = HttpClient.newHttpClient()) {
+					HttpResponse<String> response = httpClient.send(healthCheckRequest,
+							HttpResponse.BodyHandlers.ofString());
+					assertThat(response.statusCode()).isEqualTo(200);
+					assertThat(response.body()).isNotNull();
+					assertThat(response.body()).contains("\"status\":\"UP\"");
+				}
+			});
 
-        boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
+		log.info("{} on port {} is up!", appName, port);
+	}
 
-        if (!appsAreReady) {
-            throw new IllegalStateException("Timeout exceeded while waiting for applications to stop.");
-        }
+	@AfterAll
+	@SneakyThrows
+	void stopAll() {
+		log.info("Stopping all integration test components...");
+		stopConsumer();
+		CountDownLatch readyLatch = new CountDownLatch(2);
 
-        log.info("Both applications stopped");
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			executor.submit(() -> {
+				try {
+					stopProcess(appOneProcess, "App1");
+				}
+				finally {
+					readyLatch.countDown();
+				}
+			});
+			executor.submit(() -> {
+				try {
+					stopProcess(appTwoProcess, "App2");
+				}
+				finally {
+					readyLatch.countDown();
+				}
+			});
+		}
 
-        stopAdminClient();
-        stopKafkaBroker();
-        log.info("All components stopped.");
-    }
+		boolean appsAreReady = readyLatch.await(2, TimeUnit.MINUTES);
 
-    private void stopConsumer() {
-        if (consumer != null) {
-            consumer.close();
-            log.info("Kafka Consumer stopped.");
-        }
-    }
+		if (!appsAreReady) {
+			throw new IllegalStateException("Timeout exceeded while waiting for applications to stop.");
+		}
 
-    private void stopKafkaBroker() {
-        if (kafkaBroker != null) {
-            kafkaBroker.destroy();
-            log.info("Embedded Kafka stopped.");
-        }
-    }
+		log.info("Both applications stopped");
 
-    private void stopAdminClient() {
-        if (adminClient != null) {
-            adminClient.close(Duration.ofSeconds(5));
-        }
-    }
+		stopAdminClient();
+		stopKafkaBroker();
+		log.info("All components stopped.");
+	}
 
-    private static void stopProcess(Process process, String appName) {
-        if (process != null) {
-            log.info("Stopping process for {}...", appName);
-            process.destroy();
-            try {
-                if (process.waitFor(10, TimeUnit.SECONDS)) {
-                    log.info("Process for {} stopped gracefully.", appName);
-                } else {
-                    log.warn("Process for {} did not stop gracefully after 10 seconds. Forcing shutdown.", appName);
-                    process.destroyForcibly();
-                }
-            } catch (InterruptedException e) {
-                log.error("Interrupted while waiting for process {} to stop. Forcing shutdown.", appName, e);
-                process.destroyForcibly();
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
+	private void stopConsumer() {
+		if (consumer != null) {
+			consumer.close();
+			log.info("Kafka Consumer stopped.");
+		}
+	}
 
-    @AfterEach
-    void clearKafkaTopics() throws Exception {
+	private void stopKafkaBroker() {
+		if (kafkaBroker != null) {
+			kafkaBroker.destroy();
+			log.info("Embedded Kafka stopped.");
+		}
+	}
 
-        // 1. all user-visible topics (skip internal "__")
-        Set<String> topics = adminClient.listTopics().names().get().stream()
-                .filter(t -> !t.startsWith("__"))
-                .collect(Collectors.toSet());
-        if (topics.isEmpty()) return;
+	private void stopAdminClient() {
+		if (adminClient != null) {
+			adminClient.close(Duration.ofSeconds(5));
+		}
+	}
 
-        // 2. fetch metadata + config for every topic
-        Map<String, TopicDescription> desc =
-                adminClient.describeTopics(topics).allTopicNames().get();
+	private static void stopProcess(Process process, String appName) {
+		if (process != null) {
+			log.info("Stopping process for {}...", appName);
+			process.destroy();
+			try {
+				if (process.waitFor(10, TimeUnit.SECONDS)) {
+					log.info("Process for {} stopped gracefully.", appName);
+				}
+				else {
+					log.warn("Process for {} did not stop gracefully after 10 seconds. Forcing shutdown.", appName);
+					process.destroyForcibly();
+				}
+			}
+			catch (InterruptedException e) {
+				log.error("Interrupted while waiting for process {} to stop. Forcing shutdown.", appName, e);
+				process.destroyForcibly();
+				Thread.currentThread().interrupt();
+			}
+		}
+	}
 
-        Set<ConfigResource> resources = desc.keySet().stream()
-                .map(n -> new ConfigResource(ConfigResource.Type.TOPIC, n))
-                .collect(Collectors.toSet());
-        Map<ConfigResource, Config> cfg =
-                adminClient.describeConfigs(resources).all().get();
+	@AfterEach
+	void clearKafkaTopics() throws Exception {
 
-        // 3. only topics whose cleanup.policy == delete  (policy allows truncate)
-        Set<String> deletableTopics = cfg.entrySet().stream()
-                .filter(e -> {
-                    String v = e.getValue().get("cleanup.policy").value(); // null → defaults to delete
-                    return v == null || "delete".equals(v);
-                })
-                .map(e -> e.getKey().name())
-                .collect(Collectors.toSet());
+		// 1. all user-visible topics (skip internal "__")
+		Set<String> topics = adminClient.listTopics()
+			.names()
+			.get()
+			.stream()
+			.filter(t -> !t.startsWith("__"))
+			.collect(Collectors.toSet());
+		if (topics.isEmpty())
+			return;
 
-        if (deletableTopics.isEmpty()) return;
+		// 2. fetch metadata + config for every topic
+		Map<String, TopicDescription> desc = adminClient.describeTopics(topics).allTopicNames().get();
 
-        // 4. build RecordsToDelete request
-        Map<TopicPartition, RecordsToDelete> recordsToDelete = desc.values().stream()
-                .filter(d -> deletableTopics.contains(d.name()))
-                .flatMap(d -> d.partitions().stream().map(p -> new TopicPartition(d.name(), p.partition())))
-                .collect(Collectors.toMap(tp -> tp, tp -> RecordsToDelete.beforeOffset(-1L)));
+		Set<ConfigResource> resources = desc.keySet()
+			.stream()
+			.map(n -> new ConfigResource(ConfigResource.Type.TOPIC, n))
+			.collect(Collectors.toSet());
+		Map<ConfigResource, Config> cfg = adminClient.describeConfigs(resources).all().get();
 
-        adminClient.deleteRecords(recordsToDelete).all().get();
-        log.info("Cleared Kafka topics: {}", deletableTopics);
-    }
+		// 3. only topics whose cleanup.policy == delete (policy allows truncate)
+		Set<String> deletableTopics = cfg.entrySet().stream().filter(e -> {
+			String v = e.getValue().get("cleanup.policy").value(); // null → defaults to
+																	// delete
+			return v == null || "delete".equals(v);
+		}).map(e -> e.getKey().name()).collect(Collectors.toSet());
+
+		if (deletableTopics.isEmpty())
+			return;
+
+		// 4. build RecordsToDelete request
+		Map<TopicPartition, RecordsToDelete> recordsToDelete = desc.values()
+			.stream()
+			.filter(d -> deletableTopics.contains(d.name()))
+			.flatMap(d -> d.partitions().stream().map(p -> new TopicPartition(d.name(), p.partition())))
+			.collect(Collectors.toMap(tp -> tp, tp -> RecordsToDelete.beforeOffset(-1L)));
+
+		adminClient.deleteRecords(recordsToDelete).all().get();
+		log.info("Cleared Kafka topics: {}", deletableTopics);
+	}
+
 }
