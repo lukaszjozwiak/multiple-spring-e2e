@@ -118,14 +118,31 @@
                         <include>${spotlessFiles}</include>
                     </includes>
                 </configuration>
-<!--                <configuration>-->
-<!--                    <java>-->
-<!--                        <googleJavaFormat/>-->
-<!--                    </java>-->
-<!--                    <includes>-->
-<!--                        <include>${spotlessFiles}</include>-->
-<!--                    </includes>-->
-<!--                </configuration>-->
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>3.6.0</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>10.26.1</version>
+                    </dependency>
+                </dependencies>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <configLocation>custom-checkstyle-config.xml</configLocation>
+                    <consoleOutput>true</consoleOutput>
+                    <failOnViolation>true</failOnViolation>
+                </configuration>
             </plugin>
         </plugins>
     </build>

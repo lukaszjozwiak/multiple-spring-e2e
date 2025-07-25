@@ -40,7 +40,8 @@ public class KafkaStreamsProcessorConfig {
     private String outputTopic;
 
     @Bean
-    public KStream<String, SampleRecord> kStream(StreamsBuilder streamsBuilder, Serde<SampleRecord> avroSerde) {
+    public KStream<String, SampleRecord> sampleRecordStream(
+            StreamsBuilder streamsBuilder, Serde<SampleRecord> avroSerde) {
 
         KStream<String, SampleRecord> stream =
                 streamsBuilder.stream(inputTopic, Consumed.with(Serdes.String(), avroSerde));
