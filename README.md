@@ -1,4 +1,4 @@
-Formatting config
+# Formatting config
 
 Program: `powershell.exe`
 Arguments: `-NoLogo -NoProfile -ExecutionPolicy Bypass -File "$ProjectFileDir$\spotless-onefile.ps1" "$FileRelativePath$"`
@@ -26,6 +26,9 @@ if ($LASTEXITCODE) {
 }
 ```
 
+# Checstyle config
+
+```xml
 <!-- build/corp-parent/pom.xml -->
 <plugin>
   <groupId>org.apache.maven.plugins</groupId>
@@ -60,3 +63,4 @@ if ($LASTEXITCODE) {
     <failOnViolation>true</failOnViolation>
   </configuration>
 </plugin>
+```
