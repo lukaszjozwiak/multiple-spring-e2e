@@ -64,3 +64,27 @@ if ($LASTEXITCODE) {
   </configuration>
 </plugin>
 ```
+
+# Fixing kafka streams leftovers
+
+```java
+Path tmp = Files.createTempDirectory("kstreams-" + UUID.randomUUID());
+String appId = "my-app-" + UUID.randomUUID();
+
+List<String> cmd = List.of(
+    "java",
+    "-Dspring.profiles.active=test",
+    "-Dspring.kafka.streams.application-id=" + appId,
+    "-Dspring.kafka.streams.state-dir=" + tmp.toAbsolutePath(),
+    "-Dspring.kafka.streams.cleanup.on-startup=true",
+    "-Dspring.kafka.streams.cleanup.on-shutdown=true",
+    "-jar", "my-spring-kstreams-app.jar"
+);
+
+Process p = new ProcessBuilder(cmd).inheritIO().start();
+
+p.destroyForcibly(); // if needed
+Files.walk(tmp)
+     .sorted(Comparator.reverseOrder())
+    .forEach(path -> { try { Files.deleteIfExists(path); } catch (IOException ignored) {} })
+```
