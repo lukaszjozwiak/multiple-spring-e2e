@@ -1,0 +1,158 @@
+Thought for 19s
+
+Got it—here’s a practical, end-to-end way to (a) get a heap dump on OOME, and (b) store it on persistent storage in OpenShift.
+
+1) JVM options for heap dump on OOME
+
+Add JVM flags (use whichever env var your image honors—common ones are JAVA_TOOL_OPTIONS, JAVA_OPTS, or app-specific):
+
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/heapdumps
+-XX:+ExitOnOutOfMemoryError
+# Container-aware sizing (recommended):
+-XX:MaxRAMPercentage=75
+-XX:InitialRAMPercentage=50
+
+
+Notes:
+
+HeapDumpOnOutOfMemoryError dumps only when the JVM throws java.lang.OutOfMemoryError. If the pod is OOM-Killed by the kernel because the container hits the memory limit, you won’t get a dump. See checklist in §6.
+
+Set HeapDumpPath to a mounted, persistent path (we’ll mount /heapdumps).
+
+Keep headroom: set pod memory limit comfortably above Xmx (or use MaxRAMPercentage as above).
+
+2) Check what persistent storage you have
+# StorageClasses available (what you can dynamically provision)
+oc get storageclass
+
+# Any PVCs already in your namespace?
+oc get pvc
+
+# Existing PVs (usually managed by the cluster; fyi)
+oc get pv
+
+# Describe a specific StorageClass (to see reclaim policy, volumeBindingMode, etc.)
+oc describe storageclass <name>
+
+
+Pick a StorageClass that supports ReadWriteOnce (RWO) for one pod writer (most block volumes) or ReadWriteMany (RWX) if you want multiple pods to read/write (e.g., NFS/cephfs).
+
+3) Create a PersistentVolumeClaim (PVC)
+
+Example PVC (replace STANDARD-SC with your StorageClass, size as needed):
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: heapdump-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: STANDARD-SC
+  resources:
+    requests:
+      storage: 20Gi
+
+
+Apply:
+
+oc apply -f heapdump-pvc.yaml
+oc get pvc heapdump-pvc
+
+4) Mount PVC and set JVM options in your Deployment
+
+Minimal patch-style Deployment snippet:
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-java-app
+spec:
+  replicas: 1
+  template:
+    spec:
+      # OpenShift often runs containers with a random UID; fsGroup lets the pod write to the volume.
+      securityContext:
+        fsGroup: 2000
+      containers:
+        - name: app
+          image: your/registry:tag
+          env:
+            # Change to JAVA_OPTS or app-specific if needed
+            - name: JAVA_TOOL_OPTIONS
+              value: >
+                -XX:+HeapDumpOnOutOfMemoryError
+                -XX:HeapDumpPath=/heapdumps
+                -XX:+ExitOnOutOfMemoryError
+                -XX:MaxRAMPercentage=75
+                -XX:InitialRAMPercentage=50
+          volumeMounts:
+            - name: heapdumps
+              mountPath: /heapdumps
+          # Example resources with headroom (tune for your app)
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+      volumes:
+        - name: heapdumps
+          persistentVolumeClaim:
+            claimName: heapdump-pvc
+
+
+Apply (replace with your file):
+
+oc apply -f deployment.yaml
+
+5) Verify at runtime
+oc get pods
+oc describe pod <pod-name> | sed -n '/Events/,$p'
+# Inside the pod, ensure the mount exists:
+oc exec -it <pod-name> -- sh -lc "ls -l /heapdumps && id"
+
+6) Make sure you actually get a dump (OOMKill vs OOME)
+
+There are two failure modes:
+
+A) Java OOME (good for heap dump):
+The app logs show java.lang.OutOfMemoryError: Java heap space (or metaspace). The JVM writes the dump to /heapdumps.
+
+B) Container OOMKill (no Java dump):
+oc describe pod shows Last State: Terminated with Reason: OOMKilled. The kernel kills the process before Java can dump. To avoid this:
+
+Ensure Xmx (or MaxRAMPercentage) + native/misc overhead < pod memory limit.
+
+Increase the pod memory limit or lower JVM heap.
+
+Add monitoring for RSS vs limit.
+You can also proactively trigger a dump on demand before the pod gets killed:
+
+# Trigger a live dump manually when memory climbs:
+oc exec <pod> -- jcmd 1 GC.heap_dump /heapdumps/manual-$(date +%s).hprof
+
+
+(Adjust PID; many images have jcmd; if not, include a JDK or a sidecar with JDK tools that can jattach.)
+
+7) Retrieve the heap dump
+# From pod to your machine:
+oc cp <pod-name>:/heapdumps ./heapdumps
+# Or rsync (nice for big files):
+oc rsync <pod-name>:/heapdumps ./heapdumps-local
+
+8) Extras & good practices
+
+File size: Heap dumps can be large (often ≈ Xmx). Size your PVC accordingly (and set a Resources limit on the volume if your storage supports quotas).
+
+File naming: JVM will typically name dumps like java_pid<pid>.hprof. You can point HeapDumpPath to a directory (as above) or to a file (e.g., /heapdumps/dump.hprof). A directory is safer for multiple dumps.
+
+Security context: If you see permission issues on the mounted path, keep fsGroup (as above). Avoid setting fixed runAsUser in OpenShift unless you know your SCCs; the random UID model is safer, and fsGroup grants write access.
+
+CrashLoop people: If you’re already crash-looping, you can temporarily remove/raise memory limits or add command: ["sh","-c","sleep 3600 && exec <your-cmd>"] to get a shell window to inspect and test jcmd.
+
+Java metaspace OOME: The same flag dumps heaps on metaspace OOME too, but you may also monitor metaspace growth (-XX:MaxMetaspaceSize if needed).
+
+If you paste your current Deployment (redacted), I can tailor the exact patch (env var names, resources, and storage class) to your setup.
