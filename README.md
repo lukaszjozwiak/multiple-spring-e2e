@@ -92,4 +92,6 @@ Files.walk(tmp)
 # OC commands
 ```bash
 oc get pods -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.startTime}{"\n"}{end}'
+oc get pods --field-selector=status.phase=Running -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.startTime}{"\n"}{end}' | grep -vE 'deploy$'
+
 ```
