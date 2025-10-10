@@ -88,3 +88,8 @@ Files.walk(tmp)
      .sorted(Comparator.reverseOrder())
     .forEach(path -> { try { Files.deleteIfExists(path); } catch (IOException ignored) {} })
 ```
+
+# OC commands
+```bash
+oc get pods -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.startTime}{"\n"}{end}'
+```
