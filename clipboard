@@ -194,3 +194,107 @@ public class Csv2Json {
   <artifactId>jackson-dataformat-csv</artifactId>
   <version>2.18.1</version>
 </dependency>
+
+## SCRIPT RUNNER
+
+# Regex for refs (what Bitbucket actually sees: refs/heads/...):
+
+^refs/heads/((
+  (feature|bugfix|hotfix|chore)/
+    [A-Z][A-Z0-9]+-[0-9]+        # JIRA key
+    (-[a-z0-9-]+)*               # optional extra dash-separated words
+)|
+  (experiment/[a-z0-9._-]+/[a-z0-9._-]+)
+)$
+
+# Regex groovy
+
+def allowed = ~/^refs\/heads\/(((feature|bugfix|hotfix|chore)\/[A-Z][A-Z0-9]+-[0-9]+(-[a-z0-9-]+)*)|(experiment\/[a-z0-9._-]+\/[a-z0-9._-]+))$/
+
+# pre-receive
+
+import com.atlassian.bitbucket.hook.repository.*
+import com.atlassian.bitbucket.repository.RefChangeType
+
+// Allowed branch name patterns
+def allowedPattern = ~/^refs\/heads\/(((feature|bugfix|hotfix|chore)\/[A-Z][A-Z0-9]+-[0-9]+(-[a-z0-9-]+)*)|(experiment\/[a-z0-9._-]+\/[a-z0-9._-]+))$/
+
+// refChanges is injected by ScriptRunner
+for (def refChange : refChanges) {
+    def refId = refChange.ref.id as String
+
+    // Only validate branches
+    if (!refId.startsWith("refs/heads/")) {
+        continue
+    }
+
+    // Validate against our naming convention
+    if (!(refId ==~ allowedPattern)) {
+        def summary = "Branch naming convention violated"
+        def details = """\
+Branch '${refId}' does not follow the required naming convention.
+
+Allowed patterns:
+  - feature|bugfix|hotfix|chore/JIRA-123[-description]
+  - experiment/<user>/<description>
+
+Examples:
+  - refs/heads/feature/ABC-123-add-new-risk-limit
+  - refs/heads/bugfix/RISK-456-null-pointer
+  - refs/heads/experiment/lukasz/new-risk-model
+"""
+        return RepositoryHookResult.rejected(summary, details)
+    }
+}
+
+return RepositoryHookResult.accepted()
+
+# merge check
+
+import com.atlassian.bitbucket.pull.PullRequest
+
+// pullRequest is provided by ScriptRunner
+String sourceBranch = pullRequest.fromRef.displayId  // e.g. 'experiment/lukasz/new-risk-model'
+String targetBranch = pullRequest.toRef.displayId    // e.g. 'main' or 'develop'
+
+// Branches we treat as protected "real" branches
+def protectedTargets = ['main', 'master', 'develop']
+
+boolean isExperiment = sourceBranch.startsWith("experiment/")
+boolean isProtectedTarget = protectedTargets.contains(targetBranch)
+
+if (isExperiment && isProtectedTarget) {
+    mergeRequest.reject(
+        "Experimental branches cannot be merged into ${targetBranch}",
+        """\
+The branch '${sourceBranch}' is marked as experimental.
+
+Experimental branches are not intended for direct merge into '${targetBranch}'.
+If you want to bring this work into the main codebase:
+  1. Create a proper feature/BUG branch with a JIRA key, and
+  2. Cherry-pick or re-implement relevant commits there.
+"""
+    )
+    return false
+}
+
+// otherwise allow
+return true
+
+# local hook
+
+#!/usr/bin/env bash
+
+BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+
+# Same convention, but without refs/heads/ prefix
+BRANCH_REGEX='^((feature|bugfix|hotfix|chore)/[A-Z][A-Z0-9]+-[0-9]+(-[a-z0-9-]+)*|experiment/[a-z0-9._-]+/[a-z0-9._-]+)$'
+
+if [[ ! "$BRANCH_NAME" =~ $BRANCH_REGEX ]]; then
+  echo "ERROR: Branch name '$BRANCH_NAME' does not follow naming convention."
+  echo "Allowed:"
+  echo "  - feature|bugfix|hotfix|chore/JIRA-123[-description]"
+  echo "  - experiment/<user>/<description>"
+  exit 1
+fi
+
