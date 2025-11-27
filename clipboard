@@ -380,4 +380,22 @@ commitFilters << RepositoryHookCommitFilter.ADDED_TO_ANY_REF
 // The actual decision (accept/veto) is made in commitCallback
 return RepositoryHookResult.accepted()
 
+## SC condition excluding branches from commit mesage check
+
+// Branch name patterns for which the Jira validation should be SKIPPED
+def excludedPatterns = [
+    ~/^refs\/heads\/adhoc\/.*/,   // skip adhoc/*
+    ~/^refs\/heads\/poc\/.*/,     // skip poc/*
+]
+
+// Determine if pushed ref matches one of the excluded patterns
+boolean isExcluded = excludedPatterns.any { pattern ->
+    refId ==~ pattern   // "refId" is provided by ScriptRunner in this context
+}
+
+// If branch is excluded -> return false (skip hook)
+// Otherwise -> return true (run hook)
+return !isExcluded
+
+
 
