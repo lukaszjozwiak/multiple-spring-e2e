@@ -298,3 +298,86 @@ if [[ ! "$BRANCH_NAME" =~ $BRANCH_REGEX ]]; then
   exit 1
 fi
 
+## commit message check
+
+import com.atlassian.bitbucket.hook.repository.CommitAddedDetails
+import com.atlassian.bitbucket.hook.repository.PreRepositoryHookCommitCallback
+import com.atlassian.bitbucket.hook.repository.RepositoryHookCommitFilter
+import com.atlassian.bitbucket.hook.repository.RepositoryHookResult
+
+import javax.annotation.Nonnull
+
+// --------------- CONFIGURATION SECTION ------------------
+
+// Branch patterns where commit message check is NOT enforced
+// Use full ref IDs (refs/heads/...), matched with regex.
+def excludedRefPatterns = [
+    ~/^refs\/heads\/experiment\/.*/,    // skip experiment/* branches
+    // ~/^refs\/heads\/sandbox\/.*/,    // example: skip sandbox/*
+]
+
+// JIRA key at beginning of message, e.g. "RISK-123 ..." or "APP2-9: ..."
+// - optional leading whitespace
+// - key = uppercase letters + digits, dash, number
+// Adjust if you need different JIRA key style.
+def jiraPrefixPattern = ~/^\s*[A-Z][A-Z0-9]+-[0-9]+\b.*/
+
+// --------------- IMPLEMENTATION -------------------------
+
+commitCallback =
+    new PreRepositoryHookCommitCallback() {
+
+        @Override
+        boolean onCommitAdded(@Nonnull CommitAddedDetails commitDetails) {
+            def commit = commitDetails.commit
+            def message = commit.message ?: ""
+            def refId   = commitDetails.ref.id as String   // e.g. refs/heads/feature/RISK-123-something
+
+            // 1) Skip check on excluded branches
+            boolean isExcludedRef = excludedRefPatterns.any { pattern ->
+                refId ==~ pattern
+            }
+            if (isExcludedRef) {
+                return true    // do not validate this commit, continue with next
+            }
+
+            // 2) Enforce commit prefix: JIRA key at start of message
+            def matchesPrefix = (message =~ jiraPrefixPattern).find()
+
+            if (!matchesPrefix) {
+                // Block push and show clear error
+                resultBuilder.veto(
+                    "Invalid commit message",
+                    """Commit ${commit.displayId} on branch '${refId}' has an invalid message:
+
+'${message}'
+
+Expected format:
+  - Message must start with a JIRA issue key, e.g.
+    RISK-123 Implement new exposure limit
+    APP2-9: Fix timeout in risk engine
+
+If this is an experimental/POC branch, use a branch name that matches one of the excluded patterns
+(e.g. refs/heads/experiment/...)."""
+                )
+                return false   // stop processing further commits, veto push
+            }
+
+            // OK → continue with next commit
+            return true
+        }
+
+        @Override
+        RepositoryHookResult getResult() {
+            // Build final result (accept or reject) based on vetos above
+            resultBuilder.build()
+        }
+    }
+
+// Check commit messages for all commits added to any ref
+commitFilters << RepositoryHookCommitFilter.ADDED_TO_ANY_REF
+
+// The actual decision (accept/veto) is made in commitCallback
+return RepositoryHookResult.accepted()
+
+
