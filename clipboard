@@ -382,20 +382,19 @@ return RepositoryHookResult.accepted()
 
 ## SC condition excluding branches from commit mesage check
 
-// Branch name patterns for which the Jira validation should be SKIPPED
+// Patterns for branches to exclude from Jira commit validation
 def excludedPatterns = [
-    ~/^refs\/heads\/adhoc\/.*/,   // skip adhoc/*
-    ~/^refs\/heads\/poc\/.*/,     // skip poc/*
+    ~/^refs\/heads\/adhoc\/.*/, 
+    ~/^refs\/heads\/poc\/.*/
 ]
 
-// Determine if pushed ref matches one of the excluded patterns
-boolean isExcluded = excludedPatterns.any { pattern ->
-    refId ==~ pattern   // "refId" is provided by ScriptRunner in this context
+// Check all refs being pushed
+boolean anyExcluded = refChanges.any { refChange ->
+    def fullRef = refChange.ref.id  // e.g. "refs/heads/feature/ABC-1"
+    excludedPatterns.any { pattern -> fullRef ==~ pattern }
 }
 
-// If branch is excluded -> return false (skip hook)
-// Otherwise -> return true (run hook)
-return !isExcluded
-
+// If ANY of the pushed refs matches an excluded pattern -> skip hook
+return !anyExcluded
 
 
