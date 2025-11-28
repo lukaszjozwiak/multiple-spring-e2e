@@ -397,4 +397,34 @@ boolean anyExcluded = refChanges.any { refChange ->
 // If ANY of the pushed refs matches an excluded pattern -> skip hook
 return !anyExcluded
 
+## Prevent branches from direct merge
+
+
+# Version 1
+
+// Source branch of the PR, e.g. "feature/RISK-123", "adhoc/test-branch"
+def sourceBranch = pullRequest.fromRef.displayId ?: ""
+
+// Branch prefixes that must NOT be merged
+def blockedPrefixes = ['adhoc/', 'poc/']
+
+// Return true => veto merge
+return blockedPrefixes.any { prefix ->
+    sourceBranch.startsWith(prefix)
+}
+
+# Version 2
+def sourceBranch = pullRequest.fromRef.displayId ?: ""
+def targetBranch = pullRequest.toRef.displayId ?: ""
+
+def blockedPrefixes     = ['adhoc/', 'poc/']
+def protectedTargets    = ['main', 'master', 'develop']
+
+def isBlockedSource     = blockedPrefixes.any { prefix -> sourceBranch.startsWith(prefix) }
+def isProtectedTarget   = protectedTargets.any { t -> t == targetBranch }
+
+// Return true => veto merge
+return isBlockedSource && isProtectedTarge
+
+
 
