@@ -426,5 +426,20 @@ def isProtectedTarget   = protectedTargets.any { t -> t == targetBranch }
 // Return true => veto merge
 return isBlockedSource && isProtectedTarge
 
+## Block merge commits
+import com.atlassian.bitbucket.commit.Commit
 
+// Optional: limit this to specific target branches only (uncomment and adapt)
+// def targetBranch = mergeRequest.pullRequest.toRef.displayId
+// if (!(targetBranch in ["develop", "main", "master"])) {
+//     return true // do not enforce on other target branches
+// }
+
+// true = allow merge, false = block merge
+def hasMergeCommit = mergeRequest.pullRequest.commits.any { Commit c ->
+    // a merge commit has more than one parent
+    c.parents?.size() > 1
+}
+
+return !hasMergeCommit
 
