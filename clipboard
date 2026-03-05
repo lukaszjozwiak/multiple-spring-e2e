@@ -527,3 +527,113 @@ public class CsvColumnFilter {
     }
 }
 
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.dataformat.csv.CsvFactory;
+import com.fasterxml.jackson.dataformat.csv.CsvGenerator;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+public final class JacksonCsvLowLevelFilter {
+
+    private static final byte[] UTF8_BOM = new byte[] {(byte)0xEF, (byte)0xBB, (byte)0xBF};
+
+    private final CsvFactory csvFactory;
+
+    public JacksonCsvLowLevelFilter() {
+        this.csvFactory = CsvFactory.builder().build();
+    }
+
+    public byte[] filterColumns(byte[] csvBytes, List<String> keepColumns) throws IOException {
+        Objects.requireNonNull(csvBytes, "csvBytes");
+        Objects.requireNonNull(keepColumns, "keepColumns");
+        if (keepColumns.isEmpty()) throw new IllegalArgumentException("keepColumns must not be empty");
+
+        byte[] input = stripUtf8Bom(csvBytes);
+
+        try (
+                var in = new ByteArrayInputStream(input);
+                var out = new ByteArrayOutputStream();
+                JsonParser p = csvFactory.createParser(in);
+                CsvGenerator g = (CsvGenerator) csvFactory.createGenerator(out, JsonEncoding.UTF8)
+        ) {
+            // CSV parser yields each row as an array of strings (START_ARRAY ... values ... END_ARRAY)
+            // First row is header.
+            List<String> header = readRowAsList(p);
+            if (header == null) {
+                // empty input -> output just header
+                writeRow(g, keepColumns);
+                g.flush();
+                return out.toByteArray();
+            }
+
+            // Handle BOM inside first header cell (sometimes appears as \uFEFF prefix)
+            if (!header.isEmpty() && header.get(0) != null && header.get(0).startsWith("\uFEFF")) {
+                header.set(0, header.get(0).substring(1));
+            }
+
+            Map<String, Integer> idx = new LinkedHashMap<>();
+            for (int i = 0; i < header.size(); i++) idx.put(header.get(i), i);
+
+            int[] keepIdx = new int[keepColumns.size()];
+            for (int i = 0; i < keepColumns.size(); i++) {
+                String col = keepColumns.get(i);
+                Integer pos = idx.get(col);
+                if (pos == null) throw new IllegalArgumentException("Missing column: " + col);
+                keepIdx[i] = pos;
+            }
+
+            // Write output header
+            writeRow(g, keepColumns);
+
+            // Stream remaining rows
+            List<String> row;
+            while ((row = readRowAsList(p)) != null) {
+                List<String> filtered = new ArrayList<>(keepIdx.length);
+                for (int pos : keepIdx) {
+                    filtered.add(pos < row.size() ? row.get(pos) : null);
+                }
+                writeRow(g, filtered);
+            }
+
+            g.flush();
+            return out.toByteArray();
+        }
+    }
+
+    private static List<String> readRowAsList(JsonParser p) throws IOException {
+        // Advance until START_ARRAY (row) or EOF
+        JsonToken t;
+        do {
+            t = p.nextToken();
+            if (t == null) return null;
+        } while (t != JsonToken.START_ARRAY);
+
+        List<String> row = new ArrayList<>();
+        while ((t = p.nextToken()) != JsonToken.END_ARRAY) {
+            // Values are usually strings; handle nulls safely
+            row.add(t == JsonToken.VALUE_NULL ? null : p.getValueAsString());
+        }
+        return row;
+    }
+
+    private static void writeRow(CsvGenerator g, List<String> row) throws IOException {
+        g.writeStartArray();
+        for (String v : row) {
+            if (v == null) g.writeNull();
+            else g.writeString(v);
+        }
+        g.writeEndArray();
+    }
+
+    private static byte[] stripUtf8Bom(byte[] bytes) {
+        if (bytes.length >= 3
+                && bytes[0] == UTF8_BOM[0]
+                && bytes[1] == UTF8_BOM[1]
+                && bytes[2] == UTF8_BOM[2]) {
+            return Arrays.copyOfRange(bytes, 3, bytes.length);
+        }
+        return bytes;
+    }
+}
