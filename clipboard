@@ -443,3 +443,87 @@ def hasMergeCommit = mergeRequest.pullRequest.commits.any { Commit c ->
 
 return !hasMergeCommit
 
+<dependency>
+  <groupId>org.apache.commons</groupId>
+  <artifactId>commons-csv</artifactId>
+  <version>1.11.0</version>
+</dependency>
+
+import org.apache.commons.csv.*;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+public class CsvColumnFilter {
+
+    public static byte[] filterColumns(byte[] csvBytes, List<String> keepColumns) throws IOException {
+
+        try (
+                var in = new ByteArrayInputStream(csvBytes);
+                var reader = new InputStreamReader(in, StandardCharsets.UTF_8);
+                var out = new ByteArrayOutputStream();
+                var writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)
+        ) {
+
+            CSVFormat format = CSVFormat.DEFAULT.builder()
+                    .setHeader()
+                    .setSkipHeaderRecord(true)
+                    .build();
+
+            try (CSVParser parser = format.parse(reader)) {
+
+                Map<String, Integer> headerMap = parser.getHeaderMap();
+
+                // Handle potential UTF-8 BOM in first header
+                headerMap = normalizeBom(headerMap);
+
+                // Validate required columns
+                for (String col : keepColumns) {
+                    if (!headerMap.containsKey(col)) {
+                        throw new IllegalArgumentException("Missing column: " + col);
+                    }
+                }
+
+                CSVFormat outFormat = CSVFormat.DEFAULT.builder()
+                        .setHeader(keepColumns.toArray(String[]::new))
+                        .build();
+
+                try (CSVPrinter printer = new CSVPrinter(writer, outFormat)) {
+
+                    for (CSVRecord record : parser) {
+
+                        for (String col : keepColumns) {
+                            printer.print(record.get(col));
+                        }
+
+                        printer.println();
+                    }
+                }
+            }
+
+            writer.flush();
+            return out.toByteArray();
+        }
+    }
+
+    private static Map<String, Integer> normalizeBom(Map<String, Integer> headerMap) {
+        String bom = "\uFEFF";
+        Map<String, Integer> result = new LinkedHashMap<>();
+
+        boolean first = true;
+        for (var e : headerMap.entrySet()) {
+            String key = e.getKey();
+
+            if (first && key.startsWith(bom)) {
+                key = key.substring(1);
+            }
+
+            result.put(key, e.getValue());
+            first = false;
+        }
+
+        return result;
+    }
+}
+
