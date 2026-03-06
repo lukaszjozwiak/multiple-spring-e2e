@@ -637,3 +637,225 @@ public final class JacksonCsvLowLevelFilter {
         return bytes;
     }
 }
+
+// CSV JOINER
+
+import com.fasterxml.jackson.core.JsonEncoding;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.dataformat.csv.CsvFactory;
+import com.fasterxml.jackson.dataformat.csv.CsvGenerator;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.*;
+
+public class JacksonCsvJoiner {
+
+    public enum JoinType {
+        INNER,
+        LEFT,
+        RIGHT,
+        FULL_OUTER
+    }
+
+    private static final byte[] UTF8_BOM = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+
+    private final CsvFactory csvFactory = CsvFactory.builder().build();
+
+    public byte[] join(byte[] csv1, byte[] csv2, String keyColumn, JoinType joinType) throws IOException {
+        Objects.requireNonNull(csv1, "csv1 must not be null");
+        Objects.requireNonNull(csv2, "csv2 must not be null");
+        Objects.requireNonNull(keyColumn, "keyColumn must not be null");
+        Objects.requireNonNull(joinType, "joinType must not be null");
+
+        CsvTable table1 = readCsv(csv1, keyColumn, "csv1");
+        CsvTable table2 = readCsv(csv2, keyColumn, "csv2");
+
+        List<String> outputHeader = buildOutputHeader(table1.header, table2.header);
+        Set<String> resultKeys = buildResultKeys(table1.rowsByKey, table2.rowsByKey, joinType);
+
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream();
+             CsvGenerator generator = (CsvGenerator) csvFactory.createGenerator(out, JsonEncoding.UTF8)) {
+
+            writeRow(generator, outputHeader);
+
+            for (String key : resultKeys) {
+                Map<String, String> row1 = table1.rowsByKey.get(key);
+                Map<String, String> row2 = table2.rowsByKey.get(key);
+
+                List<String> mergedRow = new ArrayList<>(outputHeader.size());
+
+                for (String column : outputHeader) {
+                    String value = null;
+
+                    if (row1 != null) {
+                        value = row1.get(column);
+                    }
+                    if (row2 != null && row2.containsKey(column)) {
+                        value = row2.get(column); // csv2 overrides csv1
+                    }
+
+                    mergedRow.add(value);
+                }
+
+                writeRow(generator, mergedRow);
+            }
+
+            generator.flush();
+            return out.toByteArray();
+        }
+    }
+
+    private CsvTable readCsv(byte[] csvBytes, String keyColumn, String sourceName) throws IOException {
+        byte[] input = stripUtf8Bom(csvBytes);
+
+        try (ByteArrayInputStream in = new ByteArrayInputStream(input);
+             JsonParser parser = csvFactory.createParser(in)) {
+
+            List<String> header = readRow(parser);
+            if (header == null || header.isEmpty()) {
+                throw new IllegalArgumentException(sourceName + " is empty or missing header row");
+            }
+
+            normalizeBomInHeader(header);
+
+            int keyIndex = header.indexOf(keyColumn);
+            if (keyIndex < 0) {
+                throw new IllegalArgumentException(sourceName + " does not contain key column: " + keyColumn);
+            }
+
+            LinkedHashMap<String, Map<String, String>> rowsByKey = new LinkedHashMap<>();
+
+            List<String> row;
+            int rowNumber = 1; // header is row 1
+            while ((row = readRow(parser)) != null) {
+                rowNumber++;
+
+                Map<String, String> rowMap = toRowMap(header, row);
+                String key = rowMap.get(keyColumn);
+
+                if (key == null || key.isBlank()) {
+                    throw new IllegalArgumentException(sourceName + " has empty key at row " + rowNumber);
+                }
+
+                if (rowsByKey.containsKey(key)) {
+                    throw new IllegalArgumentException(sourceName + " contains duplicate key '" + key + "' at row " + rowNumber);
+                }
+
+                rowsByKey.put(key, rowMap);
+            }
+
+            return new CsvTable(header, rowsByKey);
+        }
+    }
+
+    private static List<String> buildOutputHeader(List<String> header1, List<String> header2) {
+        List<String> result = new ArrayList<>(header1);
+        Set<String> existing = new LinkedHashSet<>(header1);
+
+        for (String column : header2) {
+            if (!existing.contains(column)) {
+                result.add(column);
+            }
+        }
+
+        return result;
+    }
+
+    private static Set<String> buildResultKeys(
+            LinkedHashMap<String, Map<String, String>> rows1,
+            LinkedHashMap<String, Map<String, String>> rows2,
+            JoinType joinType
+    ) {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+
+        switch (joinType) {
+            case INNER -> {
+                for (String key : rows1.keySet()) {
+                    if (rows2.containsKey(key)) {
+                        result.add(key);
+                    }
+                }
+            }
+            case LEFT -> result.addAll(rows1.keySet());
+            case RIGHT -> result.addAll(rows2.keySet());
+            case FULL_OUTER -> {
+                result.addAll(rows1.keySet());
+                result.addAll(rows2.keySet());
+            }
+            default -> throw new IllegalArgumentException("Unsupported join type: " + joinType);
+        }
+
+        return result;
+    }
+
+    private static Map<String, String> toRowMap(List<String> header, List<String> row) {
+        LinkedHashMap<String, String> result = new LinkedHashMap<>();
+
+        for (int i = 0; i < header.size(); i++) {
+            String value = i < row.size() ? row.get(i) : null;
+            result.put(header.get(i), value);
+        }
+
+        return result;
+    }
+
+    private static List<String> readRow(JsonParser parser) throws IOException {
+        JsonToken token;
+
+        do {
+            token = parser.nextToken();
+            if (token == null) {
+                return null;
+            }
+        } while (token != JsonToken.START_ARRAY);
+
+        List<String> row = new ArrayList<>();
+
+        while ((token = parser.nextToken()) != JsonToken.END_ARRAY) {
+            row.add(token == JsonToken.VALUE_NULL ? null : parser.getValueAsString());
+        }
+
+        return row;
+    }
+
+    private static void writeRow(CsvGenerator generator, List<String> row) throws IOException {
+        generator.writeStartArray();
+        for (String value : row) {
+            if (value == null) {
+                generator.writeNull();
+            } else {
+                generator.writeString(value);
+            }
+        }
+        generator.writeEndArray();
+    }
+
+    private static byte[] stripUtf8Bom(byte[] bytes) {
+        if (bytes.length >= 3
+                && bytes[0] == UTF8_BOM[0]
+                && bytes[1] == UTF8_BOM[1]
+                && bytes[2] == UTF8_BOM[2]) {
+            return Arrays.copyOfRange(bytes, 3, bytes.length);
+        }
+        return bytes;
+    }
+
+    private static void normalizeBomInHeader(List<String> header) {
+        if (!header.isEmpty() && header.get(0) != null && header.get(0).startsWith("\uFEFF")) {
+            header.set(0, header.get(0).substring(1));
+        }
+    }
+
+    private static class CsvTable {
+        private final List<String> header;
+        private final LinkedHashMap<String, Map<String, String>> rowsByKey;
+
+        private CsvTable(List<String> header, LinkedHashMap<String, Map<String, String>> rowsByKey) {
+            this.header = header;
+            this.rowsByKey = rowsByKey;
+        }
+    }
+}
