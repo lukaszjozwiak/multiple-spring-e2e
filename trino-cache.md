@@ -63,8 +63,8 @@ Readers always see a fully built map, never a partially updated one.
 ### Main application
 
 
-```
-Javapackage com.example.trinocache;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.scheduling.annotation.EnableScheduling;@EnableScheduling@SpringBootApplicationpublic class TrinoCacheApplication {    public static void main(String[] args) {        SpringApplication.run(TrinoCacheApplication.class, args);    }}
+```Java
+package com.example.trinocache;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.scheduling.annotation.EnableScheduling;@EnableScheduling@SpringBootApplicationpublic class TrinoCacheApplication {    public static void main(String[] args) {        SpringApplication.run(TrinoCacheApplication.class, args);    }}
 ```
 
 
@@ -77,16 +77,16 @@ Javapackage com.example.trinocache;import org.springframework.boot.SpringApplica
 Use typed configuration for SQL and schedule.
 
 
-```
-Javapackage com.example.trinocache.config;import org.springframework.boot.context.properties.ConfigurationProperties;@ConfigurationProperties(prefix = "app.lookup-cache")public class LookupCacheProperties {    /**     * Cron for nightly refresh.     * Example: 0 0 2 * * *  => every day at 02:00     */    private String refreshCron = "0 0 2 * * *";    /**     * Trino query used to build the lookup cache.     */    private String query;    public String getRefreshCron() {        return refreshCron;    }    public void setRefreshCron(String refreshCron) {        this.refreshCron = refreshCron;    }    public String getQuery() {        return query;    }    public void setQuery(String query) {        this.query = query;    }}
+```Java
+package com.example.trinocache.config;import org.springframework.boot.context.properties.ConfigurationProperties;@ConfigurationProperties(prefix = "app.lookup-cache")public class LookupCacheProperties {    /**     * Cron for nightly refresh.     * Example: 0 0 2 * * *  => every day at 02:00     */    private String refreshCron = "0 0 2 * * *";    /**     * Trino query used to build the lookup cache.     */    private String query;    public String getRefreshCron() {        return refreshCron;    }    public void setRefreshCron(String refreshCron) {        this.refreshCron = refreshCron;    }    public String getQuery() {        return query;    }    public void setQuery(String query) {        this.query = query;    }}
 ```
 
 
 Register it:
 
 
-```
-Javapackage com.example.trinocache.config;import org.springframework.boot.context.properties.EnableConfigurationProperties;import org.springframework.context.annotation.Configuration;@Configuration@EnableConfigurationProperties(LookupCacheProperties.class)public class LookupCacheConfig {}
+```Java
+package com.example.trinocache.config;import org.springframework.boot.context.properties.EnableConfigurationProperties;import org.springframework.context.annotation.Configuration;@Configuration@EnableConfigurationProperties(LookupCacheProperties.class)public class LookupCacheConfig {}
 ```
 
 
@@ -102,8 +102,8 @@ If Trino is your main datasource, standard Spring Boot datasource config may be 
 Example `application.yml`:
 
 
-```
-YAMLspring:  datasource:    url: jdbc:trino://trino-host:8080/my_catalog/my_schema    username: my_user    password: my_password    driver-class-name: io.trino.jdbc.TrinoDriverapp:  lookup-cache:    refresh-cron: "0 0 2 * * *"    query: |      SELECT customer_id, country, segment      FROM customer_lookup_source
+```YAML
+spring:  datasource:    url: jdbc:trino://trino-host:8080/my_catalog/my_schema    username: my_user    password: my_password    driver-class-name: io.trino.jdbc.TrinoDriverapp:  lookup-cache:    refresh-cron: "0 0 2 * * *"    query: |      SELECT customer_id, country, segment      FROM customer_lookup_source
 ```
 
 
@@ -116,8 +116,8 @@ If you already have a custom Trino datasource bean, that is also fine.
 ## 4. DTO representing one lookup row
 
 
-```
-Javapackage com.example.trinocache.lookup;public record CustomerLookup(        String customerId,        String country,        String segment) {}
+```Java
+package com.example.trinocache.lookup;public record CustomerLookup(        String customerId,        String country,        String segment) {}
 ```
 
 
@@ -130,8 +130,8 @@ Javapackage com.example.trinocache.lookup;public record CustomerLookup(        S
 Use `JdbcTemplate`.
 
 
-```
-Javapackage com.example.trinocache.lookup;import com.example.trinocache.config.LookupCacheProperties;import org.springframework.jdbc.core.JdbcTemplate;import org.springframework.stereotype.Repository;import java.util.List;@Repositorypublic class CustomerLookupRepository {    private final JdbcTemplate jdbcTemplate;    private final LookupCacheProperties properties;    public CustomerLookupRepository(JdbcTemplate jdbcTemplate, LookupCacheProperties properties) {        this.jdbcTemplate = jdbcTemplate;        this.properties = properties;    }    public List<CustomerLookup> loadAll() {        return jdbcTemplate.query(                properties.getQuery(),                (rs, rowNum) -> new CustomerLookup(                        rs.getString("customer_id"),                        rs.getString("country"),                        rs.getString("segment")                )        );    }}
+```Java
+package com.example.trinocache.lookup;import com.example.trinocache.config.LookupCacheProperties;import org.springframework.jdbc.core.JdbcTemplate;import org.springframework.stereotype.Repository;import java.util.List;@Repositorypublic class CustomerLookupRepository {    private final JdbcTemplate jdbcTemplate;    private final LookupCacheProperties properties;    public CustomerLookupRepository(JdbcTemplate jdbcTemplate, LookupCacheProperties properties) {        this.jdbcTemplate = jdbcTemplate;        this.properties = properties;    }    public List<CustomerLookup> loadAll() {        return jdbcTemplate.query(                properties.getQuery(),                (rs, rowNum) -> new CustomerLookup(                        rs.getString("customer_id"),                        rs.getString("country"),                        rs.getString("segment")                )        );    }}
 ```
 
 
@@ -154,8 +154,8 @@ This is the core.
 - synchronized refresh prevents overlapping refresh executions
 
 
-```
-Javapackage com.example.trinocache.lookup;import com.example.trinocache.config.LookupCacheProperties;import jakarta.annotation.PostConstruct;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Service;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.Optional;import java.util.concurrent.atomic.AtomicReference;import java.util.function.Function;import java.util.stream.Collectors;@Servicepublic class CustomerLookupCacheService {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheService.class);    private final CustomerLookupRepository repository;    private final LookupCacheProperties properties;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef =            new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef =            new AtomicReference<>(null);    public CustomerLookupCacheService(CustomerLookupRepository repository,                                      LookupCacheProperties properties) {        this.repository = repository;        this.properties = properties;    }    @PostConstruct    public void init() {        refreshCache();    }    public Optional<CustomerLookup> findByCustomerId(String customerId) {        return Optional.ofNullable(cacheRef.get().get(customerId));    }    public Map<String, CustomerLookup> getSnapshot() {        return cacheRef.get();    }    public Instant getLastRefreshTime() {        return lastRefreshRef.get();    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        refreshCache();    }    public synchronized void refreshCache() {        log.info("Refreshing customer lookup cache...");        long start = System.currentTimeMillis();        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        long durationMs = System.currentTimeMillis() - start;        log.info("Customer lookup cache refreshed. Rows={}, durationMs={}", newCache.size(), durationMs);    }}
+```Java
+package com.example.trinocache.lookup;import com.example.trinocache.config.LookupCacheProperties;import jakarta.annotation.PostConstruct;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Service;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.Optional;import java.util.concurrent.atomic.AtomicReference;import java.util.function.Function;import java.util.stream.Collectors;@Servicepublic class CustomerLookupCacheService {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheService.class);    private final CustomerLookupRepository repository;    private final LookupCacheProperties properties;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef =            new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef =            new AtomicReference<>(null);    public CustomerLookupCacheService(CustomerLookupRepository repository,                                      LookupCacheProperties properties) {        this.repository = repository;        this.properties = properties;    }    @PostConstruct    public void init() {        refreshCache();    }    public Optional<CustomerLookup> findByCustomerId(String customerId) {        return Optional.ofNullable(cacheRef.get().get(customerId));    }    public Map<String, CustomerLookup> getSnapshot() {        return cacheRef.get();    }    public Instant getLastRefreshTime() {        return lastRefreshRef.get();    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        refreshCache();    }    public synchronized void refreshCache() {        log.info("Refreshing customer lookup cache...");        long start = System.currentTimeMillis();        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        long durationMs = System.currentTimeMillis() - start;        log.info("Customer lookup cache refreshed. Rows={}, durationMs={}", newCache.size(), durationMs);    }}
 ```
 
 
@@ -165,8 +165,8 @@ Javapackage com.example.trinocache.lookup;import com.example.trinocache.config.L
 ## 7. On-demand refresh endpoint
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.springframework.http.ResponseEntity;import org.springframework.web.bind.annotation.*;import java.time.Instant;import java.util.Map;@RestController@RequestMapping("/api/lookup-cache")public class CustomerLookupCacheController {    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheController(CustomerLookupCacheService cacheService) {        this.cacheService = cacheService;    }    @PostMapping("/refresh")    public ResponseEntity<Map<String, Object>> refresh() {        cacheService.refreshCache();        return ResponseEntity.ok(Map.of(                "status", "OK",                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }    @GetMapping("/status")    public ResponseEntity<Map<String, Object>> status() {        Instant lastRefreshTime = cacheService.getLastRefreshTime();        return ResponseEntity.ok(Map.of(                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", lastRefreshTime        ));    }    @GetMapping("/{customerId}")    public ResponseEntity<CustomerLookup> getByCustomerId(@PathVariable String customerId) {        return cacheService.findByCustomerId(customerId)                .map(ResponseEntity::ok)                .orElseGet(() -> ResponseEntity.notFound().build());    }}
+```Java
+package com.example.trinocache.lookup;import org.springframework.http.ResponseEntity;import org.springframework.web.bind.annotation.*;import java.time.Instant;import java.util.Map;@RestController@RequestMapping("/api/lookup-cache")public class CustomerLookupCacheController {    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheController(CustomerLookupCacheService cacheService) {        this.cacheService = cacheService;    }    @PostMapping("/refresh")    public ResponseEntity<Map<String, Object>> refresh() {        cacheService.refreshCache();        return ResponseEntity.ok(Map.of(                "status", "OK",                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }    @GetMapping("/status")    public ResponseEntity<Map<String, Object>> status() {        Instant lastRefreshTime = cacheService.getLastRefreshTime();        return ResponseEntity.ok(Map.of(                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", lastRefreshTime        ));    }    @GetMapping("/{customerId}")    public ResponseEntity<CustomerLookup> getByCustomerId(@PathVariable String customerId) {        return cacheService.findByCustomerId(customerId)                .map(ResponseEntity::ok)                .orElseGet(() -> ResponseEntity.notFound().build());    }}
 ```
 
 
@@ -176,8 +176,8 @@ Javapackage com.example.trinocache.lookup;import org.springframework.http.Respon
 ## 8. Example usage from business flow
 
 
-```
-Javapackage com.example.trinocache.business;import com.example.trinocache.lookup.CustomerLookup;import com.example.trinocache.lookup.CustomerLookupCacheService;import org.springframework.stereotype.Service;@Servicepublic class PricingService {    private final CustomerLookupCacheService lookupCacheService;    public PricingService(CustomerLookupCacheService lookupCacheService) {        this.lookupCacheService = lookupCacheService;    }    public String resolveSegment(String customerId) {        return lookupCacheService.findByCustomerId(customerId)                .map(CustomerLookup::segment)                .orElse("UNKNOWN");    }}
+```Java
+package com.example.trinocache.business;import com.example.trinocache.lookup.CustomerLookup;import com.example.trinocache.lookup.CustomerLookupCacheService;import org.springframework.stereotype.Service;@Servicepublic class PricingService {    private final CustomerLookupCacheService lookupCacheService;    public PricingService(CustomerLookupCacheService lookupCacheService) {        this.lookupCacheService = lookupCacheService;    }    public String resolveSegment(String customerId) {        return lookupCacheService.findByCustomerId(customerId)                .map(CustomerLookup::segment)                .orElse("UNKNOWN");    }}
 ```
 
 
@@ -206,8 +206,8 @@ That avoids inconsistent intermediate state.
 Reads are very fast:
 
 
-```
-JavacacheRef.get().get(key)
+```Java
+cacheRef.get().get(key)
 ```
 
 
@@ -254,8 +254,8 @@ So a dedicated in-memory snapshot service is simpler and more explicit.
 Sometimes it is cleaner to keep scheduling outside the cache service.
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Component;@Componentpublic class CustomerLookupCacheScheduler {    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheScheduler(CustomerLookupCacheService cacheService) {        this.cacheService = cacheService;    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        cacheService.refreshCache();    }}
+```Java
+package com.example.trinocache.lookup;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Component;@Componentpublic class CustomerLookupCacheScheduler {    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheScheduler(CustomerLookupCacheService cacheService) {        this.cacheService = cacheService;    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        cacheService.refreshCache();    }}
 ```
 
 
@@ -290,8 +290,8 @@ So old cache remains active on failure.
 You should add logging and maybe metrics:
 
 
-```
-Javapublic synchronized void refreshCache() {    log.info("Refreshing customer lookup cache...");    try {        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (a, b) -> b                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        log.info("Refresh successful. Rows={}", newCache.size());    } catch (Exception e) {        log.error("Refresh failed. Keeping previous cache snapshot.", e);    }}
+```Java
+public synchronized void refreshCache() {    log.info("Refreshing customer lookup cache...");    try {        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (a, b) -> b                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        log.info("Refresh successful. Rows={}", newCache.size());    } catch (Exception e) {        log.error("Refresh failed. Keeping previous cache snapshot.", e);    }}
 ```
 
 
@@ -326,8 +326,8 @@ If query can return duplicate keys, decide merge policy explicitly.
 Current code uses:
 
 
-```
-Java(existing, replacement) -> replacement
+```Java
+(existing, replacement) -> replacement
 ```
 
 
@@ -352,8 +352,8 @@ If you want a more reusable cache component, you can abstract the snapshot patte
 ### Generic snapshot cache helper
 
 
-```
-Javapackage com.example.trinocache.common;import java.time.Instant;import java.util.Map;import java.util.Optional;import java.util.concurrent.atomic.AtomicReference;public class SnapshotCache<K, V> {    private final AtomicReference<Map<K, V>> cacheRef = new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef = new AtomicReference<>(null);    public Optional<V> get(K key) {        return Optional.ofNullable(cacheRef.get().get(key));    }    public Map<K, V> snapshot() {        return cacheRef.get();    }    public Instant lastRefreshTime() {        return lastRefreshRef.get();    }    public void replace(Map<K, V> newSnapshot) {        cacheRef.set(Map.copyOf(newSnapshot));        lastRefreshRef.set(Instant.now());    }}
+```Java
+package com.example.trinocache.common;import java.time.Instant;import java.util.Map;import java.util.Optional;import java.util.concurrent.atomic.AtomicReference;public class SnapshotCache<K, V> {    private final AtomicReference<Map<K, V>> cacheRef = new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef = new AtomicReference<>(null);    public Optional<V> get(K key) {        return Optional.ofNullable(cacheRef.get().get(key));    }    public Map<K, V> snapshot() {        return cacheRef.get();    }    public Instant lastRefreshTime() {        return lastRefreshRef.get();    }    public void replace(Map<K, V> newSnapshot) {        cacheRef.set(Map.copyOf(newSnapshot));        lastRefreshRef.set(Instant.now());    }}
 ```
 
 
@@ -428,8 +428,8 @@ The protection comes from the **order of operations**.
 The code does **not** do this:
 
 
-```
-JavacacheRef.set(Map.of()); // clear current cacheList<CustomerLookup> rows = repository.loadAll(); // query TrinocacheRef.set(buildMap(rows));
+```Java
+cacheRef.set(Map.of()); // clear current cacheList<CustomerLookup> rows = repository.loadAll(); // query TrinocacheRef.set(buildMap(rows));
 ```
 
 
@@ -439,8 +439,8 @@ That would be dangerous, because if `loadAll()` failed, your cache would already
 Instead, it does this:
 
 
-```
-JavaList<CustomerLookup> rows = repository.loadAll();   // 1. query firstMap<String, CustomerLookup> newCache = rows.stream()        .collect(...);                              // 2. build new map separatelycacheRef.set(newCache);                             // 3. replace old cache only at the end
+```Java
+List<CustomerLookup> rows = repository.loadAll();   // 1. query firstMap<String, CustomerLookup> newCache = rows.stream()        .collect(...);                              // 2. build new map separatelycacheRef.set(newCache);                             // 3. replace old cache only at the end
 ```
 
 
@@ -477,32 +477,32 @@ Now refresh starts.
 Code calls:
 
 
-```
-JavaList<CustomerLookup> rows = repository.loadAll();
+```Java
+List<CustomerLookup> rows = repository.loadAll();
 ```
 
 
 If Trino throws exception here:
 
 
-```
-Javathrow new RuntimeException("Trino timeout");
+```Java
+throw new RuntimeException("Trino timeout");
 ```
 
 
 then execution never reaches:
 
 
-```
-JavacacheRef.set(newCache);
+```Java
+cacheRef.set(newCache);
 ```
 
 
 So `cacheRef` still points to the previous map:
 
 
-```
-Java{ "A" -> ..., "B" -> ... }
+```Java
+{ "A" -> ..., "B" -> ... }
 ```
 
 
@@ -521,8 +521,8 @@ Even if query succeeds, map creation could still fail, for example because of du
 Example:
 
 
-```
-JavaMap<String, CustomerLookup> newCache = rows.stream()        .collect(Collectors.toUnmodifiableMap(                CustomerLookup::customerId,                Function.identity()        ));
+```Java
+Map<String, CustomerLookup> newCache = rows.stream()        .collect(Collectors.toUnmodifiableMap(                CustomerLookup::customerId,                Function.identity()        ));
 ```
 
 
@@ -571,16 +571,16 @@ That is why this pattern is often called **snapshot replacement**.
 ### Before refresh
 
 
-```
-JavacacheRef ---> OLD_MAP
+```Java
+cacheRef ---> OLD_MAP
 ```
 
 
 ### During refresh
 
 
-```
-JavacacheRef ---> OLD_MAPnewCache ---> building in local variable
+```Java
+cacheRef ---> OLD_MAPnewCache ---> building in local variable
 ```
 
 
@@ -590,8 +590,8 @@ If anything fails here, `cacheRef` still points to `OLD_MAP`.
 ### After successful refresh
 
 
-```
-JavacacheRef ---> NEW_MAP
+```Java
+cacheRef ---> NEW_MAP
 ```
 
 
@@ -607,8 +607,8 @@ Only then does the application start using the new data.
 This line is the key idea:
 
 
-```
-JavaMap<String, CustomerLookup> newCache = ...
+```Java
+Map<String, CustomerLookup> newCache = ...
 ```
 
 
@@ -627,8 +627,8 @@ So failures while creating `newCache` do not corrupt the currently active cache.
 Unsafe version:
 
 
-```
-Javapublic synchronized void refreshCache() {    Map<String, CustomerLookup> cache = cacheRef.get();    cache.clear(); // dangerous    List<CustomerLookup> rows = repository.loadAll(); // may fail    for (CustomerLookup row : rows) {        cache.put(row.customerId(), row);    }}
+```Java
+public synchronized void refreshCache() {    Map<String, CustomerLookup> cache = cacheRef.get();    cache.clear(); // dangerous    List<CustomerLookup> rows = repository.loadAll(); // may fail    for (CustomerLookup row : rows) {        cache.put(row.customerId(), row);    }}
 ```
 
 
@@ -653,8 +653,8 @@ That is exactly what the snapshot replacement approach avoids.
 This makes the behavior more obvious:
 
 
-```
-Javapublic synchronized void refreshCache() {    log.info("Refreshing customer lookup cache...");    try {        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        log.info("Refresh successful. Rows={}", newCache.size());    } catch (Exception e) {        log.error("Refresh failed. Previous cache snapshot is kept.", e);    }}
+```Java
+public synchronized void refreshCache() {    log.info("Refreshing customer lookup cache...");    try {        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        log.info("Refresh successful. Rows={}", newCache.size());    } catch (Exception e) {        log.error("Refresh failed. Previous cache snapshot is kept.", e);    }}
 ```
 
 
@@ -687,16 +687,16 @@ In that case, refresh still succeeds and cache gets replaced with bad data.
 If that matters, add validation before swap, for example:
 
 
-```
-Javaif (newCache.isEmpty()) {    throw new IllegalStateException("Refusing to replace cache with empty snapshot");}
+```Java
+if (newCache.isEmpty()) {    throw new IllegalStateException("Refusing to replace cache with empty snapshot");}
 ```
 
 
 or:
 
 
-```
-Javaif (newCache.size() < minimumExpectedSize) {    throw new IllegalStateException("Snapshot too small, likely invalid");}
+```Java
+if (newCache.size() < minimumExpectedSize) {    throw new IllegalStateException("Snapshot too small, likely invalid");}
 ```
 
 
@@ -762,8 +762,8 @@ This is the most Spring-native solution.
 For Maven:
 
 
-```
-XML<dependency>    <groupId>org.springframework.retry</groupId>    <artifactId>spring-retry</artifactId></dependency><dependency>    <groupId>org.springframework</groupId>    <artifactId>spring-aspects</artifactId></dependency>
+```XML
+<dependency>    <groupId>org.springframework.retry</groupId>    <artifactId>spring-retry</artifactId></dependency><dependency>    <groupId>org.springframework</groupId>    <artifactId>spring-aspects</artifactId></dependency>
 ```
 
 
@@ -773,8 +773,8 @@ XML<dependency>    <groupId>org.springframework.retry</groupId>    <artifactId>s
 ## 2. Enable retry
 
 
-```
-Javapackage com.example.trinocache;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.retry.annotation.EnableRetry;import org.springframework.scheduling.annotation.EnableScheduling;@EnableRetry@EnableScheduling@SpringBootApplicationpublic class TrinoCacheApplication {    public static void main(String[] args) {        SpringApplication.run(TrinoCacheApplication.class, args);    }}
+```Java
+package com.example.trinocache;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.retry.annotation.EnableRetry;import org.springframework.scheduling.annotation.EnableScheduling;@EnableRetry@EnableScheduling@SpringBootApplicationpublic class TrinoCacheApplication {    public static void main(String[] args) {        SpringApplication.run(TrinoCacheApplication.class, args);    }}
 ```
 
 
@@ -812,8 +812,8 @@ That is the safest layout.
 ## 4. Retryable refresher bean
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.retry.annotation.Backoff;import org.springframework.retry.annotation.Recover;import org.springframework.retry.annotation.Retryable;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;import java.util.function.Function;import java.util.stream.Collectors;@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef;    private final AtomicReference<Instant> lastRefreshRef;    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheRef = cacheState.cacheRef();        this.lastRefreshRef = cacheState.lastRefreshRef();    }    @Retryable(            retryFor = {Exception.class},            maxAttempts = 3,            backoff = @Backoff(delay = 5000, multiplier = 2.0)    )    public void refreshCache() {        log.info("Refreshing customer lookup cache...");        long start = System.currentTimeMillis();        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        validateSnapshot(newCache);        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        long durationMs = System.currentTimeMillis() - start;        log.info("Customer lookup cache refreshed. Rows={}, durationMs={}", newCache.size(), durationMs);    }    private void validateSnapshot(Map<String, CustomerLookup> newCache) {        if (newCache.isEmpty()) {            throw new IllegalStateException("Refusing to replace cache with empty snapshot");        }    }    @Recover    public void recover(Exception ex) {        log.error("Cache refresh failed after all retry attempts. Previous cache snapshot is kept.", ex);    }}
+```Java
+package com.example.trinocache.lookup;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.retry.annotation.Backoff;import org.springframework.retry.annotation.Recover;import org.springframework.retry.annotation.Retryable;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;import java.util.function.Function;import java.util.stream.Collectors;@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef;    private final AtomicReference<Instant> lastRefreshRef;    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheRef = cacheState.cacheRef();        this.lastRefreshRef = cacheState.lastRefreshRef();    }    @Retryable(            retryFor = {Exception.class},            maxAttempts = 3,            backoff = @Backoff(delay = 5000, multiplier = 2.0)    )    public void refreshCache() {        log.info("Refreshing customer lookup cache...");        long start = System.currentTimeMillis();        List<CustomerLookup> rows = repository.loadAll();        Map<String, CustomerLookup> newCache = rows.stream()                .collect(Collectors.toUnmodifiableMap(                        CustomerLookup::customerId,                        Function.identity(),                        (existing, replacement) -> replacement                ));        validateSnapshot(newCache);        cacheRef.set(newCache);        lastRefreshRef.set(Instant.now());        long durationMs = System.currentTimeMillis() - start;        log.info("Customer lookup cache refreshed. Rows={}, durationMs={}", newCache.size(), durationMs);    }    private void validateSnapshot(Map<String, CustomerLookup> newCache) {        if (newCache.isEmpty()) {            throw new IllegalStateException("Refusing to replace cache with empty snapshot");        }    }    @Recover    public void recover(Exception ex) {        log.error("Cache refresh failed after all retry attempts. Previous cache snapshot is kept.", ex);    }}
 ```
 
 
@@ -826,8 +826,8 @@ Javapackage com.example.trinocache.lookup;import org.slf4j.Logger;import org.slf
 This keeps shared state in one bean.
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;@Componentpublic class CustomerLookupCacheState {    private final AtomicReference<Map<String, CustomerLookup>> cacheRef =            new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef =            new AtomicReference<>(null);    public AtomicReference<Map<String, CustomerLookup>> cacheRef() {        return cacheRef;    }    public AtomicReference<Instant> lastRefreshRef() {        return lastRefreshRef;    }}
+```Java
+package com.example.trinocache.lookup;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;@Componentpublic class CustomerLookupCacheState {    private final AtomicReference<Map<String, CustomerLookup>> cacheRef =            new AtomicReference<>(Map.of());    private final AtomicReference<Instant> lastRefreshRef =            new AtomicReference<>(null);    public AtomicReference<Map<String, CustomerLookup>> cacheRef() {        return cacheRef;    }    public AtomicReference<Instant> lastRefreshRef() {        return lastRefreshRef;    }}
 ```
 
 
@@ -837,8 +837,8 @@ Javapackage com.example.trinocache.lookup;import org.springframework.stereotype.
 ## 6. Service for reads
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.springframework.stereotype.Service;import java.time.Instant;import java.util.Map;import java.util.Optional;@Servicepublic class CustomerLookupCacheService {    private final CustomerLookupCacheState cacheState;    public CustomerLookupCacheService(CustomerLookupCacheState cacheState) {        this.cacheState = cacheState;    }    public Optional<CustomerLookup> findByCustomerId(String customerId) {        return Optional.ofNullable(cacheState.cacheRef().get().get(customerId));    }    public Map<String, CustomerLookup> getSnapshot() {        return cacheState.cacheRef().get();    }    public Instant getLastRefreshTime() {        return cacheState.lastRefreshRef().get();    }}
+```Java
+package com.example.trinocache.lookup;import org.springframework.stereotype.Service;import java.time.Instant;import java.util.Map;import java.util.Optional;@Servicepublic class CustomerLookupCacheService {    private final CustomerLookupCacheState cacheState;    public CustomerLookupCacheService(CustomerLookupCacheState cacheState) {        this.cacheState = cacheState;    }    public Optional<CustomerLookup> findByCustomerId(String customerId) {        return Optional.ofNullable(cacheState.cacheRef().get().get(customerId));    }    public Map<String, CustomerLookup> getSnapshot() {        return cacheState.cacheRef().get();    }    public Instant getLastRefreshTime() {        return cacheState.lastRefreshRef().get();    }}
 ```
 
 
@@ -848,8 +848,8 @@ Javapackage com.example.trinocache.lookup;import org.springframework.stereotype.
 ## 7. Scheduler bean
 
 
-```
-Javapackage com.example.trinocache.lookup;import jakarta.annotation.PostConstruct;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Component;@Componentpublic class CustomerLookupCacheScheduler {    private final CustomerLookupCacheRefresher refresher;    public CustomerLookupCacheScheduler(CustomerLookupCacheRefresher refresher) {        this.refresher = refresher;    }    @PostConstruct    public void init() {        refresher.refreshCache();    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        refresher.refreshCache();    }}
+```Java
+package com.example.trinocache.lookup;import jakarta.annotation.PostConstruct;import org.springframework.scheduling.annotation.Scheduled;import org.springframework.stereotype.Component;@Componentpublic class CustomerLookupCacheScheduler {    private final CustomerLookupCacheRefresher refresher;    public CustomerLookupCacheScheduler(CustomerLookupCacheRefresher refresher) {        this.refresher = refresher;    }    @PostConstruct    public void init() {        refresher.refreshCache();    }    @Scheduled(cron = "${app.lookup-cache.refresh-cron}")    public void scheduledRefresh() {        refresher.refreshCache();    }}
 ```
 
 
@@ -859,8 +859,8 @@ Javapackage com.example.trinocache.lookup;import jakarta.annotation.PostConstruc
 ## 8. Manual refresh endpoint
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.springframework.http.ResponseEntity;import org.springframework.web.bind.annotation.*;import java.util.Map;@RestController@RequestMapping("/api/lookup-cache")public class CustomerLookupCacheController {    private final CustomerLookupCacheRefresher refresher;    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheController(CustomerLookupCacheRefresher refresher,                                         CustomerLookupCacheService cacheService) {        this.refresher = refresher;        this.cacheService = cacheService;    }    @PostMapping("/refresh")    public ResponseEntity<Map<String, Object>> refresh() {        refresher.refreshCache();        return ResponseEntity.ok(Map.of(                "status", "OK",                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }    @GetMapping("/status")    public ResponseEntity<Map<String, Object>> status() {        return ResponseEntity.ok(Map.of(                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }}
+```Java
+package com.example.trinocache.lookup;import org.springframework.http.ResponseEntity;import org.springframework.web.bind.annotation.*;import java.util.Map;@RestController@RequestMapping("/api/lookup-cache")public class CustomerLookupCacheController {    private final CustomerLookupCacheRefresher refresher;    private final CustomerLookupCacheService cacheService;    public CustomerLookupCacheController(CustomerLookupCacheRefresher refresher,                                         CustomerLookupCacheService cacheService) {        this.refresher = refresher;        this.cacheService = cacheService;    }    @PostMapping("/refresh")    public ResponseEntity<Map<String, Object>> refresh() {        refresher.refreshCache();        return ResponseEntity.ok(Map.of(                "status", "OK",                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }    @GetMapping("/status")    public ResponseEntity<Map<String, Object>> status() {        return ResponseEntity.ok(Map.of(                "size", cacheService.getSnapshot().size(),                "lastRefreshTime", cacheService.getLastRefreshTime()        ));    }}
 ```
 
 
@@ -934,8 +934,8 @@ and not retry obvious permanent problems such as:
 Example:
 
 
-```
-Java@Retryable(        retryFor = {                java.sql.SQLTransientException.class,                org.springframework.dao.TransientDataAccessException.class        },        maxAttempts = 3,        backoff = @Backoff(delay = 5000, multiplier = 2.0))public void refreshCache() {    ...}
+```Java
+@Retryable(        retryFor = {                java.sql.SQLTransientException.class,                org.springframework.dao.TransientDataAccessException.class        },        maxAttempts = 3,        backoff = @Backoff(delay = 5000, multiplier = 2.0))public void refreshCache() {    ...}
 ```
 
 
@@ -962,16 +962,16 @@ JavamaxAttempts = 3,backoff = @Backoff(delay = 5000, multiplier = 2.0)
 you can make them configurable:
 
 
-```
-Java@Retryable(        retryFor = {org.springframework.dao.TransientDataAccessException.class},        maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",        backoff = @Backoff(                delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"        ))public void refreshCache() {    ...}
+```Java
+@Retryable(        retryFor = {org.springframework.dao.TransientDataAccessException.class},        maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",        backoff = @Backoff(                delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"        ))public void refreshCache() {    ...}
 ```
 
 
 And in `application.yml`:
 
 
-```
-YAMLapp:  lookup-cache:    refresh-cron: "0 0 2 * * *"    retry:      max-attempts: 3      delay-ms: 5000      multiplier: 2.0
+```YAML
+app:  lookup-cache:    refresh-cron: "0 0 2 * * *"    retry:      max-attempts: 3      delay-ms: 5000      multiplier: 2.0
 ```
 
 
@@ -996,8 +996,8 @@ You can still keep synchronization or locking around the actual refresh operatio
 Example with `ReentrantLock`:
 
 
-```
-Javapackage com.example.trinocache.lookup;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.retry.annotation.Backoff;import org.springframework.retry.annotation.Recover;import org.springframework.retry.annotation.Retryable;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;import java.util.concurrent.locks.ReentrantLock;import java.util.function.Function;import java.util.stream.Collectors;@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef;    private final AtomicReference<Instant> lastRefreshRef;    private final ReentrantLock refreshLock = new ReentrantLock();    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheRef = cacheState.cacheRef();        this.lastRefreshRef = cacheState.lastRefreshRef();    }    @Retryable(            retryFor = {org.springframework.dao.TransientDataAccessException.class},            maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",            backoff = @Backoff(                    delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                    multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"            )    )    public void refreshCache() {        if (!refreshLock.tryLock()) {            log.info("Cache refresh skipped because another refresh is already in progress.");            return;        }        try {            log.info("Refreshing customer lookup cache...");            List<CustomerLookup> rows = repository.loadAll();            Map<String, CustomerLookup> newCache = rows.stream()                    .collect(Collectors.toUnmodifiableMap(                            CustomerLookup::customerId,                            Function.identity(),                            (existing, replacement) -> replacement                    ));            validateSnapshot(newCache);            cacheRef.set(newCache);            lastRefreshRef.set(Instant.now());            log.info("Customer lookup cache refreshed. Rows={}", newCache.size());        } finally {            refreshLock.unlock();        }    }    private void validateSnapshot(Map<String, CustomerLookup> newCache) {        if (newCache.isEmpty()) {            throw new IllegalStateException("Refusing to replace cache with empty snapshot");        }    }    @Recover    public void recover(org.springframework.dao.TransientDataAccessException ex) {        log.error("Cache refresh failed after all retry attempts. Previous cache snapshot is kept.", ex);    }}
+```Java
+package com.example.trinocache.lookup;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.retry.annotation.Backoff;import org.springframework.retry.annotation.Recover;import org.springframework.retry.annotation.Retryable;import org.springframework.stereotype.Component;import java.time.Instant;import java.util.List;import java.util.Map;import java.util.concurrent.atomic.AtomicReference;import java.util.concurrent.locks.ReentrantLock;import java.util.function.Function;import java.util.stream.Collectors;@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final AtomicReference<Map<String, CustomerLookup>> cacheRef;    private final AtomicReference<Instant> lastRefreshRef;    private final ReentrantLock refreshLock = new ReentrantLock();    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheRef = cacheState.cacheRef();        this.lastRefreshRef = cacheState.lastRefreshRef();    }    @Retryable(            retryFor = {org.springframework.dao.TransientDataAccessException.class},            maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",            backoff = @Backoff(                    delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                    multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"            )    )    public void refreshCache() {        if (!refreshLock.tryLock()) {            log.info("Cache refresh skipped because another refresh is already in progress.");            return;        }        try {            log.info("Refreshing customer lookup cache...");            List<CustomerLookup> rows = repository.loadAll();            Map<String, CustomerLookup> newCache = rows.stream()                    .collect(Collectors.toUnmodifiableMap(                            CustomerLookup::customerId,                            Function.identity(),                            (existing, replacement) -> replacement                    ));            validateSnapshot(newCache);            cacheRef.set(newCache);            lastRefreshRef.set(Instant.now());            log.info("Customer lookup cache refreshed. Rows={}", newCache.size());        } finally {            refreshLock.unlock();        }    }    private void validateSnapshot(Map<String, CustomerLookup> newCache) {        if (newCache.isEmpty()) {            throw new IllegalStateException("Refusing to replace cache with empty snapshot");        }    }    @Recover    public void recover(org.springframework.dao.TransientDataAccessException ex) {        log.error("Cache refresh failed after all retry attempts. Previous cache snapshot is kept.", ex);    }}
 ```
 
 
@@ -1039,16 +1039,16 @@ Below is the most compact version worth using.
 ## Compact final version
 
 
-```
-Java@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final CustomerLookupCacheState cacheState;    private final ReentrantLock refreshLock = new ReentrantLock();    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheState = cacheState;    }    @Retryable(            retryFor = {                    org.springframework.dao.TransientDataAccessException.class,                    java.sql.SQLTransientException.class            },            maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",            backoff = @Backoff(                    delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                    multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"            )    )    public void refreshCache() {        if (!refreshLock.tryLock()) {            log.info("Refresh already in progress, skipping.");            return;        }        try {            List<CustomerLookup> rows = repository.loadAll();            Map<String, CustomerLookup> newCache = rows.stream()                    .collect(Collectors.toUnmodifiableMap(                            CustomerLookup::customerId,                            Function.identity(),                            (a, b) -> b                    ));            if (newCache.isEmpty()) {                throw new IllegalStateException("Refusing to publish empty cache");            }            cacheState.cacheRef().set(newCache);            cacheState.lastRefreshRef().set(Instant.now());            log.info("Lookup cache refreshed, size={}", newCache.size());        } finally {            refreshLock.unlock();        }    }    @Recover    public void recover(Exception ex) {        log.error("Lookup cache refresh failed after retries. Previous snapshot remains active.", ex);    }}
+```Java
+@Componentpublic class CustomerLookupCacheRefresher {    private static final Logger log = LoggerFactory.getLogger(CustomerLookupCacheRefresher.class);    private final CustomerLookupRepository repository;    private final CustomerLookupCacheState cacheState;    private final ReentrantLock refreshLock = new ReentrantLock();    public CustomerLookupCacheRefresher(CustomerLookupRepository repository,                                        CustomerLookupCacheState cacheState) {        this.repository = repository;        this.cacheState = cacheState;    }    @Retryable(            retryFor = {                    org.springframework.dao.TransientDataAccessException.class,                    java.sql.SQLTransientException.class            },            maxAttemptsExpression = "${app.lookup-cache.retry.max-attempts:3}",            backoff = @Backoff(                    delayExpression = "${app.lookup-cache.retry.delay-ms:5000}",                    multiplierExpression = "${app.lookup-cache.retry.multiplier:2.0}"            )    )    public void refreshCache() {        if (!refreshLock.tryLock()) {            log.info("Refresh already in progress, skipping.");            return;        }        try {            List<CustomerLookup> rows = repository.loadAll();            Map<String, CustomerLookup> newCache = rows.stream()                    .collect(Collectors.toUnmodifiableMap(                            CustomerLookup::customerId,                            Function.identity(),                            (a, b) -> b                    ));            if (newCache.isEmpty()) {                throw new IllegalStateException("Refusing to publish empty cache");            }            cacheState.cacheRef().set(newCache);            cacheState.lastRefreshRef().set(Instant.now());            log.info("Lookup cache refreshed, size={}", newCache.size());        } finally {            refreshLock.unlock();        }    }    @Recover    public void recover(Exception ex) {        log.error("Lookup cache refresh failed after retries. Previous snapshot remains active.", ex);    }}
 ```
 
 
 And config:
 
 
-```
-YAMLapp:  lookup-cache:    refresh-cron: "0 0 2 * * *"    retry:      max-attempts: 3      delay-ms: 5000      multiplier: 2.0
+```YAML
+app:  lookup-cache:    refresh-cron: "0 0 2 * * *"    retry:      max-attempts: 3      delay-ms: 5000      multiplier: 2.0
 ```
 
 
