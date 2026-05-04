@@ -859,3 +859,37 @@ public class JacksonCsvJoiner {
         }
     }
 }
+
+# 1. Update your local view of the remote
+git fetch origin
+
+# 2. Define the file you are looking for
+TARGET_FILE="important-config.txt"
+COMMIT_SHA="abc1234"
+
+# 3. Loop through remote branches
+for remote_ref in $(git branch -r | grep 'origin/' | grep -v 'origin/HEAD'); do
+    
+    branch_name="${remote_ref#origin/}"
+    
+    # Switch to the branch
+    git checkout "$branch_name" || git checkout -b "$branch_name" "$remote_ref"
+    
+    # 4. Check if the file exists in this specific branch
+    if [ -f "$TARGET_FILE" ]; then
+        echo "✅ File found in $branch_name. Applying changeset..."
+        
+        if git cherry-pick "$COMMIT_SHA"; then
+            git push origin "$branch_name"
+        else
+            echo "❌ Conflict in $branch_name. Skipping."
+            git cherry-pick --abort
+        fi
+    else
+        echo "⏭️  $TARGET_FILE not found in $branch_name. Skipping branch."
+    fi
+done
+
+git push origin --all --force
+
+
