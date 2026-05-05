@@ -893,3 +893,14 @@ done
 git push origin --all --force
 
 
+curl -X POST -u username:app_password \
+  -H "Content-Type: application/json" \
+  "https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/commit/{commit_hash}/statuses/build" \
+  -d '{
+    "key": "manual-bypass",
+    "state": "SUCCESSFUL",
+    "name": "Manual Override",
+    "url": "https://google.com",
+    "description": "Bypassing build check manually"
+  }'
+
