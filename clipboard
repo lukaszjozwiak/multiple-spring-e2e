@@ -904,3 +904,20 @@ curl -X POST -u username:app_password \
     "description": "Bypassing build check manually"
   }'
 
+- name: app-container
+        image: your-registry/your-app:latest
+        env:
+        - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB
+          value: "DEBUG"
+        - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_SERVLET_DISPATCHERSERVLET
+          value: "TRACE"
+        - name: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY
+          value: "DEBUG"
+        - name: LOGGING_LEVEL_ORG_APACHE_CATALINA
+          value: "DEBUG"
+        - name: LOGGING_LEVEL_ORG_APACHE_COYOTE
+          value: "DEBUG"
+        - name: SERVER_ERROR_INCLUDE_STACKTRACE
+          value: "always"
+        - name: SERVER_ERROR_INCLUDE_MESSAGE
+          value: "always"
