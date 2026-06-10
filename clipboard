@@ -921,3 +921,7 @@ curl -X POST -u username:app_password \
           value: "always"
         - name: SERVER_ERROR_INCLUDE_MESSAGE
           value: "always"
+
+# JQ command
+
+curl -L -o /usr/bin/jq.exe https://github.com/jqlang/jq/releases/latest/download/jq-windows-amd64.exe
