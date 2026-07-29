@@ -925,3 +925,54 @@ curl -X POST -u username:app_password \
 # JQ command
 
 curl -L -o /usr/bin/jq.exe https://github.com/jqlang/jq/releases/latest/download/jq-windows-amd64.exe
+
+
+# SQL decopress
+
+WITH
+    FUNCTION gunzip_utf8(payload VARBINARY)
+    RETURNS VARCHAR
+    LANGUAGE PYTHON
+    WITH (handler = 'gunzip_utf8')
+    AS $$
+import gzip
+
+def gunzip_utf8(payload):
+    if payload is None:
+        return None
+
+    return gzip.decompress(payload).decode('utf-8')
+$$
+SELECT
+    message_id,
+    gunzip_utf8(compressed_data) AS raw_text
+FROM kafka_catalog.kafka_schema.kafka_topic
+WHERE compressed_data IS NOT NULL;
+
+WITH
+    FUNCTION gunzip_utf8(payload VARBINARY)
+    RETURNS VARCHAR
+    LANGUAGE PYTHON
+    WITH (handler = 'gunzip_utf8')
+    AS $$
+import gzip
+
+def gunzip_utf8(payload):
+    return None if payload is None else gzip.decompress(payload).decode('utf-8')
+$$
+SELECT gunzip_utf8(compressed_data) AS raw_text
+FROM kafka_catalog.kafka_schema.kafka_topic
+LIMIT 10;
+
+
+SELECT to_hex(substr(compressed_data, 1, 2)) AS header
+FROM kafka_catalog.kafka_schema.kafka_topic
+WHERE compressed_data IS NOT NULL
+LIMIT 10;
+
+SHOW FUNCTIONS LIKE '%gzip%';
+
+SELECT
+    from_utf8(gzip_decompress(compressed_data)) AS raw_text
+FROM kafka_catalog.kafka_schema.kafka_topic;
+
