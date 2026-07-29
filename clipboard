@@ -976,3 +976,38 @@ SELECT
     from_utf8(gzip_decompress(compressed_data)) AS raw_text
 FROM kafka_catalog.kafka_schema.kafka_topic;
 
+# Unzip
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.zip.GZIPInputStream;
+
+public final class GzipUtils {
+
+    private GzipUtils() {
+    }
+
+    public static String decompressToString(ByteBuffer gzippedBuffer) throws IOException {
+        if (gzippedBuffer == null) {
+            return null;
+        }
+
+        // duplicate() prevents changing the position of the original ByteBuffer
+        ByteBuffer buffer = gzippedBuffer.duplicate();
+
+        byte[] compressedBytes = new byte[buffer.remaining()];
+        buffer.get(compressedBytes);
+
+        try (
+                ByteArrayInputStream input = new ByteArrayInputStream(compressedBytes);
+                GZIPInputStream gzipInput = new GZIPInputStream(input);
+                ByteArrayOutputStream output = new ByteArrayOutputStream()
+        ) {
+            gzipInput.transferTo(output);
+            return output.toString(StandardCharsets.UTF_8);
+        }
+    }
+}
+
