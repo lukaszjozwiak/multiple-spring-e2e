@@ -1011,3 +1011,255 @@ public final class GzipUtils {
     }
 }
 
+# CSV indexed store
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+
+import java.io.ByteArrayInputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+public final class IndexedCsvStore implements AutoCloseable {
+
+    private static final Charset CHARSET = StandardCharsets.UTF_8;
+
+    private final FileChannel channel;
+    private final Map<CsvKey, Location> index;
+
+    private final CSVFormat recordFormat;
+
+    private IndexedCsvStore(
+            FileChannel channel,
+            Map<CsvKey, Location> index,
+            CSVFormat recordFormat) {
+
+        this.channel = channel;
+        this.index = index;
+        this.recordFormat = recordFormat;
+    }
+
+    public static IndexedCsvStore open(Path path) throws IOException {
+
+        IndexResult indexResult = buildIndex(path);
+
+        FileChannel channel = FileChannel.open(
+                path,
+                StandardOpenOption.READ);
+
+        return new IndexedCsvStore(
+                channel,
+                indexResult.index(),
+                indexResult.recordFormat());
+    }
+
+    private static IndexResult buildIndex(Path path) throws IOException {
+
+        Map<CsvKey, Location> index =
+                new HashMap<>(140_000);
+
+        CSVFormat fileFormat = CSVFormat.RFC4180.builder()
+                .setHeader()
+                .setSkipHeaderRecord(true)
+                .get();
+
+        try (CSVParser parser = CSVParser.builder()
+                .setPath(path)
+                .setCharset(CHARSET)
+                .setFormat(fileFormat)
+                .setTrackBytes(true)
+                .get()) {
+
+            List<String> headers = parser.getHeaderNames();
+
+            CSVRecord previous = null;
+
+            for (CSVRecord current : parser) {
+
+                if (previous != null) {
+                    addToIndex(
+                            index,
+                            previous,
+                            current.getBytePosition());
+                }
+
+                previous = current;
+            }
+
+            // Handle last record.
+            if (previous != null) {
+                addToIndex(
+                        index,
+                        previous,
+                        Files.size(path));
+            }
+
+            CSVFormat recordFormat = CSVFormat.RFC4180.builder()
+                    .setHeader(headers.toArray(String[]::new))
+                    .setSkipHeaderRecord(false)
+                    .get();
+
+            return new IndexResult(
+                    Collections.unmodifiableMap(index),
+                    recordFormat);
+        }
+    }
+
+    private static void addToIndex(
+            Map<CsvKey, Location> index,
+            CSVRecord record,
+            long nextRecordOffset) {
+
+        long offset = record.getBytePosition();
+        long length = nextRecordOffset - offset;
+
+        CsvKey key = new CsvKey(
+                record.get("ID"),
+                record.get("TYPE"));
+
+        Location location = new Location(
+                offset,
+                Math.toIntExact(length));
+
+        Location old = index.put(key, location);
+
+        if (old != null) {
+            throw new IllegalStateException(
+                    "Duplicate CSV key: " + key);
+        }
+    }
+
+    public Optional<byte[]> readRaw(CsvKey key) throws IOException {
+
+        Location location = index.get(key);
+
+        if (location == null) {
+            return Optional.empty();
+        }
+
+        return Optional.of(read(location));
+    }
+
+    private byte[] read(Location location) throws IOException {
+
+        ByteBuffer buffer =
+                ByteBuffer.allocate(location.length());
+
+        long position = location.offset();
+
+        while (buffer.hasRemaining()) {
+
+            int read = channel.read(buffer, position);
+
+            if (read < 0) {
+                throw new EOFException(
+                        "Unexpected EOF at position " + position);
+            }
+
+            if (read == 0) {
+                continue;
+            }
+
+            position += read;
+        }
+
+        return buffer.array();
+    }
+
+    @Override
+    public void close() throws IOException {
+        channel.close();
+    }
+
+    private record IndexResult(
+            Map<CsvKey, Location> index,
+            CSVFormat recordFormat) {
+    }
+}
+
+import java.math.BigDecimal;
+
+public record ReferenceData(
+        String id,
+        String type,
+        String name,
+        BigDecimal amount,
+        String description
+) {
+}
+
+public Optional<ReferenceData> find(CsvKey key)
+        throws IOException {
+
+    Location location = index.get(key);
+
+    if (location == null) {
+        return Optional.empty();
+    }
+
+    byte[] bytes = read(location);
+
+    return Optional.of(parse(bytes));
+}
+
+private ReferenceData parse(byte[] bytes)
+        throws IOException {
+
+    try (var reader = new InputStreamReader(
+                    new ByteArrayInputStream(bytes),
+                    CHARSET);
+
+         var parser = CSVParser.builder()
+                 .setReader(reader)
+                 .setFormat(recordFormat)
+                 .get()) {
+
+        Iterator<CSVRecord> iterator = parser.iterator();
+
+        if (!iterator.hasNext()) {
+            throw new IllegalStateException(
+                    "Location contains no CSV record");
+        }
+
+        CSVRecord record = iterator.next();
+
+        return new ReferenceData(
+                record.get("ID"),
+                record.get("TYPE"),
+                record.get("NAME"),
+                new java.math.BigDecimal(
+                        record.get("AMOUNT")),
+                record.get("DESCRIPTION"));
+    }
+}
+
+@KafkaListener(
+        topics = "business-events",
+        groupId = "risk-transform")
+public void handle(BusinessEvent event) throws IOException {
+
+    CsvKey key = new CsvKey(
+            event.id(),
+            event.type());
+
+    ReferenceData referenceData = csvStore.find(key)
+            .orElseThrow(() ->
+                    new IllegalStateException(
+                            "Reference data not found: " + key));
+
+    process(event, referenceData);
+}
