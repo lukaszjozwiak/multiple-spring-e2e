@@ -1372,10 +1372,8 @@ abstract class AbstractKafkaForwardingTest {
   private String outputTopic;
 
 
-  @BeforeEach
-  void resetTopicsAndStartStreams() throws Exception {
-    streamsFactory.stop();
-    String applicationId = "forwarding-test-" + UUID.randomUUID();
+  @BeforeAll
+  void createTopics() throws Exception {
     try (var admin =
         AdminClient.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
       var topics = configuredTopics(environment).values().stream().distinct().toList();
@@ -1388,6 +1386,16 @@ abstract class AbstractKafkaForwardingTest {
       if (!missingTopics.isEmpty()) {
         admin.createTopics(missingTopics).all().get(10, TimeUnit.SECONDS);
       }
+      describeTopicsWhenReady(admin, topics);
+    }
+  }
+
+  @BeforeEach
+  void resetTopicsAndStartStreams() throws Exception {
+    streamsFactory.stop();
+    try (var admin =
+        AdminClient.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+      var topics = configuredTopics(environment).values().stream().distinct().toList();
       // Discover every partition, including topics that already have multiple partitions.
       var recordsToDelete =
           describeTopicsWhenReady(admin, topics).values().stream()
@@ -1401,37 +1409,19 @@ abstract class AbstractKafkaForwardingTest {
                       partition -> partition, partition -> RecordsToDelete.beforeOffset(-1)));
       // -1 deletes through the high watermark, leaving the topics empty.
       admin.deleteRecords(recordsToDelete).all().get(10, TimeUnit.SECONDS);
-      // Fix the starting position before any test messages arrive, including with latest.
-      var inputOffsets =
-          admin
-              .listOffsets(
-                  recordsToDelete.keySet().stream()
-                      .filter(partition -> partition.topic().equals(inputTopic))
-                      .collect(
-                          Collectors.toMap(
-                              partition -> partition, partition -> OffsetSpec.latest())))
-              .all()
-              .get(10, TimeUnit.SECONDS);
-      admin
-          .alterConsumerGroupOffsets(
-              applicationId,
-              inputOffsets.entrySet().stream()
-                  .collect(
-                      Collectors.toMap(
-                          Map.Entry::getKey,
-                          entry -> new OffsetAndMetadata(entry.getValue().offset()))))
-          .all()
-          .get(10, TimeUnit.SECONDS);
     }
     // Each run needs fresh offsets as well as empty topics.
     var streamsProperties = streamsFactory.getStreamsConfiguration();
-    streamsProperties.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
+    streamsProperties.setProperty(
+        StreamsConfig.APPLICATION_ID_CONFIG, "forwarding-test-" + UUID.randomUUID());
     streamsFactory.setStreamsConfiguration(streamsProperties);
     streamsFactory.start();
+    // Starting Streams is asynchronous; wait before publishing with latest offsets.
     await()
         .atMost(Duration.ofSeconds(30))
         .until(() -> streamsFactory.getKafkaStreams().state() == KafkaStreams.State.RUNNING);
   }
+
 
   private static Map<String, TopicDescription> describeTopicsWhenReady(
       AdminClient admin, List<String> topics) {
