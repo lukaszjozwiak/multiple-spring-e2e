@@ -1263,3 +1263,198 @@ public void handle(BusinessEvent event) throws IOException {
 
     process(event, referenceData);
 }
+
+# Junit properties
+# One broker for the entire JUnit test plan; the listener starts and stops it.
+spring.kafka.global.embedded.enabled=true
+spring.kafka.embedded.count=1
+spring.kafka.embedded.ports=0
+spring.kafka.embedded.partitions=1
+spring.embedded.kafka.brokers.property=spring.kafka.bootstrap-servers
+
+# Run classes concurrently while keeping methods within each class sequential.
+junit.jupiter.execution.parallel.enabled=true
+junit.jupiter.execution.parallel.mode.default=same_thread
+junit.jupiter.execution.parallel.mode.classes.default=concurrent
+junit.jupiter.execution.parallel.config.strategy=fixed
+junit.jupiter.execution.parallel.config.fixed.parallelism=2
+
+# Kafka test setup
+package org.training.kafkatest;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.RecordsToDelete;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.streams.StreamsConfig;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.env.Environment;
+import org.springframework.kafka.config.StreamsBuilderFactoryBean;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.springframework.test.context.DynamicPropertyRegistry;
+
+@SpringBootTest(
+    properties = {
+      "spring.kafka.streams.auto-startup=false",
+      "spring.kafka.streams.properties.auto.offset.reset=earliest"
+    })
+@Import(AbstractKafkaForwardingTest.TopicConfiguration.class)
+abstract class AbstractKafkaForwardingTest {
+
+  protected static void registerKafkaProperties(DynamicPropertyRegistry registry, String prefix) {
+    // Capture values once so every property lookup in this context uses the same resources.
+    String id = prefix + "-" + UUID.randomUUID();
+    String stateDir = Path.of(System.getProperty("java.io.tmpdir"), id).toString();
+    registry.add("spring.kafka.streams.application-id", () -> id);
+    registry.add("spring.kafka.streams.state-dir", () -> stateDir);
+  }
+
+  private static Map<String, String> configuredTopics(Environment environment) {
+    return Binder.get(environment)
+        .bind("app.kafka.topic", Bindable.mapOf(String.class, String.class))
+        .orElseThrow(() -> new IllegalStateException("No app.kafka.topic properties configured"));
+  }
+
+  @TestConfiguration(proxyBeanMethods = false)
+  static class TopicConfiguration {
+    @Bean
+    DynamicPropertyRegistrar topicProperties(Environment environment) {
+      // Read and capture the original values before registering their overrides.
+      var topics = configuredTopics(environment);
+      String id = environment.getRequiredProperty("spring.kafka.streams.application-id");
+      return registry ->
+          topics.forEach(
+              (name, value) -> {
+                String isolatedName = value + "-" + id;
+                registry.add("app.kafka.topic." + name, () -> isolatedName);
+              });
+    }
+  }
+
+  @Autowired private Environment environment;
+  @Autowired private KafkaTemplate<String, String> kafkaTemplate;
+  @Autowired private StreamsBuilderFactoryBean streamsFactory;
+
+  @Value("${spring.kafka.bootstrap-servers}")
+  private String bootstrapServers;
+
+  @Value("${app.kafka.topic.input}")
+  private String inputTopic;
+
+  @Value("${app.kafka.topic.output}")
+  private String outputTopic;
+
+  @BeforeEach
+  void resetTopicsAndStartStreams() throws Exception {
+    streamsFactory.stop();
+    try (var admin =
+        AdminClient.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+      var topics = configuredTopics(environment).values().stream().distinct().toList();
+      var existingTopics = admin.listTopics().names().get(10, TimeUnit.SECONDS);
+      var missingTopics =
+          topics.stream()
+              .filter(topic -> !existingTopics.contains(topic))
+              .map(topic -> new NewTopic(topic, 1, (short) 1))
+              .toList();
+      if (!missingTopics.isEmpty()) {
+        admin.createTopics(missingTopics).all().get(10, TimeUnit.SECONDS);
+      }
+      // Discover every partition, including topics that already have multiple partitions.
+      var recordsToDelete =
+          describeTopicsWhenReady(admin, topics).values().stream()
+              .flatMap(
+                  topic ->
+                      topic.partitions().stream()
+                          .map(
+                              partition -> new TopicPartition(topic.name(), partition.partition())))
+              .collect(
+                  Collectors.toMap(
+                      partition -> partition, partition -> RecordsToDelete.beforeOffset(-1)));
+      // -1 deletes through the high watermark, leaving the topics empty.
+      admin.deleteRecords(recordsToDelete).all().get(10, TimeUnit.SECONDS);
+    }
+    // Each run needs fresh offsets as well as empty topics.
+    var streamsProperties = streamsFactory.getStreamsConfiguration();
+    streamsProperties.setProperty(
+        StreamsConfig.APPLICATION_ID_CONFIG, "forwarding-test-" + UUID.randomUUID());
+    streamsFactory.setStreamsConfiguration(streamsProperties);
+    streamsFactory.start();
+  }
+
+  private static Map<String, TopicDescription> describeTopicsWhenReady(
+      AdminClient admin, List<String> topics) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+    while (true) {
+      try {
+        return admin.describeTopics(topics).allTopicNames().get(10, TimeUnit.SECONDS);
+      } catch (ExecutionException exception) {
+        // Topic creation can finish before the broker's metadata exposes the new topic.
+        if (!(exception.getCause() instanceof UnknownTopicOrPartitionException)
+            || System.nanoTime() >= deadline) {
+          throw exception;
+        }
+        Thread.sleep(100);
+      }
+    }
+  }
+
+  @AfterEach
+  void stopStreams() {
+    streamsFactory.stop();
+  }
+
+  @Test
+  void forwardsMessageWithNullKey() throws Exception {
+    assertMessageIsForwarded(null, "Message without a key");
+  }
+
+  protected void assertMessageIsForwarded(String key, String message) throws Exception {
+    Map<String, Object> properties =
+        Map.of(
+            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+            bootstrapServers,
+            ConsumerConfig.GROUP_ID_CONFIG,
+            "forwarding-test-" + UUID.randomUUID(),
+            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+            "earliest",
+            ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
+            false);
+    try (var consumer =
+        new KafkaConsumer<String, String>(
+            properties, new StringDeserializer(), new StringDeserializer())) {
+      consumer.subscribe(List.of(outputTopic));
+      kafkaTemplate.send(inputTopic, key, message).get(10, TimeUnit.SECONDS);
+      var record = KafkaTestUtils.getSingleRecord(consumer, outputTopic, Duration.ofSeconds(30));
+      assertThat(record.key()).isEqualTo(key);
+      assertThat(record.value()).isEqualTo(message);
+    }
+  }
+}
+
