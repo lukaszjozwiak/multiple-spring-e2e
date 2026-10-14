@@ -1409,20 +1409,19 @@ abstract class AbstractKafkaForwardingTest {
   }
 
   private static Map<String, TopicDescription> describeTopicsWhenReady(
-      AdminClient admin, List<String> topics) throws Exception {
-    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-    while (true) {
-      try {
-        return admin.describeTopics(topics).allTopicNames().get(10, TimeUnit.SECONDS);
-      } catch (ExecutionException exception) {
-        // Topic creation can finish before the broker's metadata exposes the new topic.
-        if (!(exception.getCause() instanceof UnknownTopicOrPartitionException)
-            || System.nanoTime() >= deadline) {
-          throw exception;
-        }
-        Thread.sleep(100);
-      }
-    }
+      AdminClient admin, List<String> topics) {
+    // Topic creation can finish before the broker's metadata exposes the new topic.
+    return await()
+        .atMost(Duration.ofSeconds(10))
+        .pollDelay(Duration.ZERO)
+        .pollInterval(Duration.ofMillis(100))
+        .ignoreExceptionsMatching(
+            exception ->
+                exception instanceof ExecutionException
+                    && exception.getCause() instanceof UnknownTopicOrPartitionException)
+        .until(
+            () -> admin.describeTopics(topics).allTopicNames().get(10, TimeUnit.SECONDS),
+            descriptions -> true);
   }
 
   @AfterEach
