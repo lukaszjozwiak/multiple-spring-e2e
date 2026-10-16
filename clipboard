@@ -1283,6 +1283,7 @@ junit.jupiter.execution.parallel.config.fixed.parallelism=2
 package org.training.kafkatest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -1301,16 +1302,25 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.extension.TestWatcher;
+import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
@@ -1323,22 +1333,70 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 @SpringBootTest(
     properties = {
       "spring.kafka.streams.auto-startup=false",
-      "spring.kafka.streams.properties.auto.offset.reset=earliest"
+      "spring.kafka.streams.properties.auto.offset.reset=latest"
     })
 @Import(AbstractKafkaForwardingTest.TopicConfiguration.class)
 abstract class AbstractKafkaForwardingTest {
 
+  private static final Logger log = LoggerFactory.getLogger(AbstractKafkaForwardingTest.class);
+  private static final String TOPIC_PROPERTY_PREFIX = "app.kafka.topic";
+
+  private String testName;
+  private long testStarted;
+
+  @RegisterExtension
+  final TestWatcher lifecycleOutcome =
+      new TestWatcher() {
+        @Override
+        public void testSuccessful(ExtensionContext context) {
+          logLifecycle("Test passed after " + elapsedMillis() + " ms");
+        }
+
+        @Override
+        public void testFailed(ExtensionContext context, Throwable cause) {
+          logLifecycle("Test failed after " + elapsedMillis() + " ms");
+          log.error("[{}] Failure in {}", testName, context.getUniqueId(), cause);
+        }
+
+        @Override
+        public void testAborted(ExtensionContext context, Throwable cause) {
+          log.warn("[{}] Test aborted: {}", testName, context.getUniqueId(), cause);
+        }
+      };
+
+  private long elapsedMillis() {
+    return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - testStarted);
+  }
+
+  private void logLifecycle(String event) {
+    var streams = streamsFactory.getKafkaStreams();
+    var properties = streamsFactory.getStreamsConfiguration();
+    log.info(
+        "[{}] {} | thread={} context={}@{} factory=@{} running={} streams=@{} state={} applicationId={} stateDir={} input={} output={}",
+        testName,
+        event,
+        Thread.currentThread().getName(),
+        applicationContext.getId(),
+        Integer.toHexString(System.identityHashCode(applicationContext)),
+        Integer.toHexString(System.identityHashCode(streamsFactory)),
+        streamsFactory.isRunning(),
+        streams == null ? "none" : Integer.toHexString(System.identityHashCode(streams)),
+        streams == null ? "none" : streams.state(),
+        properties.getProperty(StreamsConfig.APPLICATION_ID_CONFIG),
+        properties.getProperty(StreamsConfig.STATE_DIR_CONFIG),
+        inputTopic,
+        outputTopic);
+  }
+
   protected static void registerKafkaProperties(DynamicPropertyRegistry registry, String prefix) {
     // Capture values once so every property lookup in this context uses the same resources.
     String id = prefix + "-" + UUID.randomUUID();
-    String stateDir = Path.of(System.getProperty("java.io.tmpdir"), id).toString();
     registry.add("spring.kafka.streams.application-id", () -> id);
-    registry.add("spring.kafka.streams.state-dir", () -> stateDir);
   }
 
   private static Map<String, String> configuredTopics(Environment environment) {
     return Binder.get(environment)
-        .bind("app.kafka.topic", Bindable.mapOf(String.class, String.class))
+        .bind(TOPIC_PROPERTY_PREFIX, Bindable.mapOf(String.class, String.class))
         .orElseThrow(() -> new IllegalStateException("No app.kafka.topic properties configured"));
   }
 
@@ -1353,14 +1411,17 @@ abstract class AbstractKafkaForwardingTest {
           topics.forEach(
               (name, value) -> {
                 String isolatedName = value + "-" + id;
-                registry.add("app.kafka.topic." + name, () -> isolatedName);
+                registry.add(TOPIC_PROPERTY_PREFIX + "." + name, () -> isolatedName);
               });
     }
   }
 
   @Autowired private Environment environment;
+  @Autowired private ApplicationContext applicationContext;
   @Autowired private KafkaTemplate<String, String> kafkaTemplate;
   @Autowired private StreamsBuilderFactoryBean streamsFactory;
+
+  @TempDir private Path stateDirectory;
 
   @Value("${spring.kafka.bootstrap-servers}")
   private String bootstrapServers;
@@ -1371,31 +1432,31 @@ abstract class AbstractKafkaForwardingTest {
   @Value("${app.kafka.topic.output}")
   private String outputTopic;
 
-
-  @BeforeAll
-  void createTopics() throws Exception {
+  @BeforeEach
+  void resetTopicsAndStartStreams(TestInfo testInfo) throws Exception {
+    testName = getClass().getSimpleName() + "." + testInfo.getTestMethod().orElseThrow().getName();
+    testStarted = System.nanoTime();
+    logLifecycle("Setup started; temporary directory=" + stateDirectory);
+    stopStreamsAndAwaitShutdown();
     try (var admin =
         AdminClient.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
       var topics = configuredTopics(environment).values().stream().distinct().toList();
       var existingTopics = admin.listTopics().names().get(10, TimeUnit.SECONDS);
+      logLifecycle(
+          "Topic discovery complete; configured="
+              + topics
+              + "; existing configured topics="
+              + topics.stream().filter(existingTopics::contains).toList());
       var missingTopics =
           topics.stream()
               .filter(topic -> !existingTopics.contains(topic))
               .map(topic -> new NewTopic(topic, 1, (short) 1))
               .toList();
       if (!missingTopics.isEmpty()) {
+        logLifecycle("Creating topics: " + missingTopics);
         admin.createTopics(missingTopics).all().get(10, TimeUnit.SECONDS);
+        logLifecycle("Topic creation acknowledged");
       }
-      describeTopicsWhenReady(admin, topics);
-    }
-  }
-
-  @BeforeEach
-  void resetTopicsAndStartStreams() throws Exception {
-    streamsFactory.stop();
-    try (var admin =
-        AdminClient.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
-      var topics = configuredTopics(environment).values().stream().distinct().toList();
       // Discover every partition, including topics that already have multiple partitions.
       var recordsToDelete =
           describeTopicsWhenReady(admin, topics).values().stream()
@@ -1408,20 +1469,27 @@ abstract class AbstractKafkaForwardingTest {
                   Collectors.toMap(
                       partition -> partition, partition -> RecordsToDelete.beforeOffset(-1)));
       // -1 deletes through the high watermark, leaving the topics empty.
-      admin.deleteRecords(recordsToDelete).all().get(10, TimeUnit.SECONDS);
+      logLifecycle("Deleting records through high watermarks: " + recordsToDelete.keySet());
+      var deletionResults = admin.deleteRecords(recordsToDelete).all().get(10, TimeUnit.SECONDS);
+      logLifecycle("Record deletion complete: " + deletionResults);
     }
     // Each run needs fresh offsets as well as empty topics.
     var streamsProperties = streamsFactory.getStreamsConfiguration();
     streamsProperties.setProperty(
-        StreamsConfig.APPLICATION_ID_CONFIG, "forwarding-test-" + UUID.randomUUID());
+        StreamsConfig.APPLICATION_ID_CONFIG,
+        this.getClass().getSimpleName() + "-" + UUID.randomUUID());
+    streamsProperties.setProperty(StreamsConfig.STATE_DIR_CONFIG, stateDirectory.toString());
     streamsFactory.setStreamsConfiguration(streamsProperties);
+    logLifecycle(
+        "Starting Streams; auto.offset.reset="
+            + streamsProperties.getProperty("auto.offset.reset"));
     streamsFactory.start();
-    // Starting Streams is asynchronous; wait before publishing with latest offsets.
+    logLifecycle("Start returned; awaiting RUNNING");
     await()
         .atMost(Duration.ofSeconds(30))
         .until(() -> streamsFactory.getKafkaStreams().state() == KafkaStreams.State.RUNNING);
+    logLifecycle("Setup complete; Streams ready after " + elapsedMillis() + " ms");
   }
-
 
   private static Map<String, TopicDescription> describeTopicsWhenReady(
       AdminClient admin, List<String> topics) {
@@ -1441,7 +1509,36 @@ abstract class AbstractKafkaForwardingTest {
 
   @AfterEach
   void stopStreams() {
+    logLifecycle("Teardown started");
+    var streams = stopStreamsAndAwaitShutdown();
+    if (streams != null) {
+      logLifecycle(
+          "Clearing local state for stopped Streams instance @"
+              + Integer.toHexString(System.identityHashCode(streams)));
+      streams.cleanUp();
+      logLifecycle("Local state cleanup complete");
+    }
+    // JUnit deletes the entire @TempDir after teardown, including leftover metadata files.
+    logLifecycle("Teardown complete; JUnit will delete temporary directory=" + stateDirectory);
+  }
+
+  private KafkaStreams stopStreamsAndAwaitShutdown() {
+    var streams = streamsFactory.getKafkaStreams();
+    logLifecycle("Stopping Streams");
     streamsFactory.stop();
+    logLifecycle("Stop returned; verifying shutdown");
+    assertThat(streamsFactory.isRunning()).as("Streams factory stopped").isFalse();
+    if (streams != null) {
+      // Keep the instance captured before stop(), which clears the factory's reference.
+      await("Kafka Streams shutdown")
+          .atMost(Duration.ofSeconds(30))
+          .untilAsserted(
+              () -> assertThat(streams.state()).isEqualTo(KafkaStreams.State.NOT_RUNNING));
+    }
+    logLifecycle(
+        "Shutdown verified; captured instance state="
+            + (streams == null ? "none" : streams.state()));
+    return streams;
   }
 
   @Test
@@ -1464,11 +1561,25 @@ abstract class AbstractKafkaForwardingTest {
         new KafkaConsumer<String, String>(
             properties, new StringDeserializer(), new StringDeserializer())) {
       consumer.subscribe(List.of(outputTopic));
-      kafkaTemplate.send(inputTopic, key, message).get(10, TimeUnit.SECONDS);
+      logLifecycle(
+          "Output consumer subscribed; groupId=" + properties.get(ConsumerConfig.GROUP_ID_CONFIG));
+      logLifecycle("Sending input record; key=" + key);
+      var sent = kafkaTemplate.send(inputTopic, key, message).get(10, TimeUnit.SECONDS);
+      logLifecycle("Input acknowledged: " + sent.getRecordMetadata());
+      logLifecycle("Waiting up to 30 seconds for output record");
       var record = KafkaTestUtils.getSingleRecord(consumer, outputTopic, Duration.ofSeconds(30));
+      logLifecycle(
+          "Output received; partition="
+              + record.partition()
+              + "; offset="
+              + record.offset()
+              + "; key="
+              + record.key());
       assertThat(record.key()).isEqualTo(key);
       assertThat(record.value()).isEqualTo(message);
+      logLifecycle("Forwarded key and value verified");
     }
   }
 }
+
 
